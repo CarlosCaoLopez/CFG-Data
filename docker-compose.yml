@@ -1,0 +1,45 @@
+version: "3.8"
+
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+
+  postgres:
+    image: timescale/timescaledb:latest-pg15
+    environment:
+      POSTGRES_USER: insider
+      POSTGRES_PASSWORD: insider_pass
+      POSTGRES_DB: insider_detection
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  ingestion:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: python -m ingestion.backfill_runner
+    env_file: .env
+    depends_on:
+      - redis
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: python -m workers.worker
+    env_file: .env
+    depends_on:
+      - redis
+      - postgres
+    deploy:
+      replicas: 4
+
+volumes:
+  redis_data:
+  postgres_data:
