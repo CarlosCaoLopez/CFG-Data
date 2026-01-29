@@ -14,6 +14,7 @@ Sistema de detección de insider trading en Polymarket mediante análisis de pat
 ```bash
 # Instalar dependencias
 poetry install
+poetry add psycopg2-binary
 
 # Levantar servicios (Redis + PostgreSQL)
 docker-compose up -d redis postgres

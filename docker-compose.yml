@@ -15,7 +15,7 @@ services:
       POSTGRES_PASSWORD: insider_pass
       POSTGRES_DB: insider_detection
     ports:
-      - "5432:5432"
+      - "5433:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
 
