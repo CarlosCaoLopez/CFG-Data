@@ -56,3 +56,27 @@ pytest tests/unit -v
 # Tests de integración
 pytest tests/integration -v --cov=.
 ```
+
+### Scripts de prueba (carpeta `scripts/`)
+
+Scripts para probar componentes individuales contra las APIs reales:
+
+```bash
+# Test del collector de mercados
+python -m scripts.test_markets
+
+# Test del collector de trades
+python -m scripts.test_trades
+
+# Test del normalizador de datos
+python -m scripts.test_normalizer
+
+# Test del collector de wallet age (requiere POLYGONSCAN_API_KEY)
+python -m scripts.test_wallet_age
+
+# Test del publisher a Redis (requiere Redis)
+python -m scripts.test_publisher
+
+# Test del backfill completo (dry run, sin Redis)
+python -m scripts.test_backfill
+```

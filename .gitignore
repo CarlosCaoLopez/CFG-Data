@@ -31,3 +31,7 @@ poetry.lock
 # OS
 .DS_Store
 Thumbs.db
+
+# CLAUDE
+CLAUDE.md
+cfg_servilleta.md
