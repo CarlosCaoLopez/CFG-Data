@@ -1,7 +1,7 @@
 # Markets Collector - Fetch closed markets from Gamma API
 
 import structlog
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import AsyncIterator
 
 from ingestion.config import get_settings
@@ -50,7 +50,7 @@ class MarketsCollector:
         days = days_back or self.settings.backfill_default_days
 
         # Calculate cutoff date
-        cutoff_date = datetime.utcnow() - timedelta(days=days)
+        cutoff_date = datetime.now(timezone.utc) - timedelta(days=days)
 
         params = {
             "closed": "true",
@@ -102,13 +102,16 @@ class MarketsCollector:
                 if closed_time:
                     try:
                         if isinstance(closed_time, str):
-                            # Handle ISO format
+                            # Handle ISO format (ensure timezone aware)
                             closed_dt = datetime.fromisoformat(
                                 closed_time.replace("Z", "+00:00")
-                            ).replace(tzinfo=None)
+                            )
+                            # If naive, assume UTC
+                            if closed_dt.tzinfo is None:
+                                closed_dt = closed_dt.replace(tzinfo=timezone.utc)
                         else:
-                            # Handle unix timestamp
-                            closed_dt = datetime.utcfromtimestamp(closed_time / 1000)
+                            # Handle unix timestamp (timezone aware)
+                            closed_dt = datetime.fromtimestamp(closed_time / 1000, tz=timezone.utc)
 
                         if closed_dt < cutoff_date:
                             logger.info(

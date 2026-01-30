@@ -2,7 +2,7 @@
 
 import json
 import structlog
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from contracts.raw_market_data import (
@@ -193,7 +193,7 @@ class DataNormalizer:
     def _parse_datetime(self, value: Any) -> datetime:
         """Parse datetime from various formats"""
         if value is None:
-            return datetime.utcnow()
+            return datetime.now(timezone.utc)
 
         if isinstance(value, datetime):
             return value
@@ -221,7 +221,7 @@ class DataNormalizer:
                 pass
 
         logger.warning("datetime_parse_failed", value=str(value)[:50])
-        return datetime.utcnow()
+        return datetime.now(timezone.utc)
 
     def _parse_outcome_prices(self, value: Any) -> list[float] | None:
         """Parse outcome prices from JSON string or list"""

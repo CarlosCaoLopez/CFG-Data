@@ -3,7 +3,7 @@
 import json
 import uuid
 import structlog
-from datetime import datetime
+from datetime import datetime, timezone
 
 import redis.asyncio as redis
 
@@ -72,7 +72,7 @@ class RedisPublisher(QueueProducer):
             "trades_count": str(len(batch.trades)),
             "wallets_count": str(len(batch.wallet_ages)),
             "data": batch_data,
-            "published_at": datetime.utcnow().isoformat(),
+            "published_at": datetime.now(timezone.utc).isoformat(),
         }
 
         try:
@@ -123,7 +123,7 @@ class RedisPublisher(QueueProducer):
             "market_id": market.market_id,
             "trade": trade.model_dump_json(),
             "market": market.model_dump_json(),
-            "published_at": datetime.utcnow().isoformat(),
+            "published_at": datetime.now(timezone.utc).isoformat(),
         }
 
         try:

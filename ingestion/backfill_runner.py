@@ -5,7 +5,7 @@ import json
 import argparse
 import structlog
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
 
 from ingestion.config import get_settings
 from ingestion.http_client import get_http_client
@@ -89,7 +89,7 @@ class BackfillRunner:
             "total_trades": 0,
             "total_wallets": 0,
             "errors": 0,
-            "started_at": datetime.utcnow().isoformat(),
+            "started_at": datetime.now(timezone.utc).isoformat(),
         }
 
         try:
@@ -146,7 +146,7 @@ class BackfillRunner:
             if not self.dry_run:
                 await publisher.close()
 
-        stats["finished_at"] = datetime.utcnow().isoformat()
+        stats["finished_at"] = datetime.now(timezone.utc).isoformat()
 
         logger.info("backfill_completed", **stats)
 
@@ -246,7 +246,7 @@ class BackfillRunner:
         try:
             data = {
                 "processed_markets": list(self.processed_markets),
-                "updated_at": datetime.utcnow().isoformat(),
+                "updated_at": datetime.now(timezone.utc).isoformat(),
             }
             self.checkpoint_file.write_text(json.dumps(data, indent=2))
         except Exception as e:
