@@ -9,7 +9,6 @@ from contracts.raw_market_data import (
 
 from contracts.processing_job import (
     JobType,
-    JobPriority,
     ProcessingJob,
     JobResult,
 )
@@ -28,7 +27,6 @@ __all__ = [
 
     # Processing jobs (B → C)
     "JobType",
-    "JobPriority",
     "ProcessingJob",
     "JobResult",
 

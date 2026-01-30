@@ -13,18 +13,10 @@ class JobType(str, Enum):
     UPDATE_PERCENTILES = "update_percentiles"
 
 
-class JobPriority(int, Enum):
-    """Job priority levels"""
-    LOW = 1         # Backfill histórico
-    NORMAL = 5      # Mercados recién cerrados
-    HIGH = 10       # Tiempo real
-
-
 class ProcessingJob(BaseModel):
     """Job definition for worker processing"""
     job_id: str = Field(..., description="Unique job identifier")
     job_type: JobType = Field(..., description="Type of processing to perform")
-    priority: JobPriority = Field(..., description="Job priority level")
     created_at: datetime = Field(
         default_factory=datetime.utcnow,
         description="When the job was created"
@@ -32,6 +24,10 @@ class ProcessingJob(BaseModel):
     payload: dict = Field(
         ...,
         description="Job-specific data (structure depends on job_type)"
+    )
+    retry_count: int = Field(
+        default=0,
+        description="Number of times this job has been retried"
     )
 
 
