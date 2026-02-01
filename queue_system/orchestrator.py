@@ -2,10 +2,10 @@
 # Reads from raw_data_stream, converts batches to jobs, publishes to jobs_stream
 
 import asyncio
-from queue.streams.raw_data_stream import RawDataStream
-from queue.streams.jobs_stream import JobsStream
-from queue.scheduler.job_creator import JobCreator
-from queue.config import QueueConfig
+from queue_system.streams.raw_data_stream import RawDataStream
+from queue_system.streams.jobs_stream import JobsStream
+from queue_system.scheduler.job_creator import JobCreator
+from queue_system.config import QueueConfig
 import structlog
 
 logger = structlog.get_logger()

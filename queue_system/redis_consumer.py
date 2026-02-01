@@ -2,12 +2,12 @@
 # Used by Persona C (Workers) to consume processing jobs
 
 import asyncio
-from queue.interfaces.consumer import QueueConsumer
-from queue.streams.jobs_stream import JobsStream
-from queue.exceptions import QueueConnectionError, JobNotFoundError
-from queue.config import QueueConfig
-from queue.reliability.retry_handler import RetryHandler
-from queue.reliability.dead_letter import DeadLetterQueue
+from queue_system.interfaces.consumer import QueueConsumer
+from queue_system.streams.jobs_stream import JobsStream
+from queue_system.exceptions import QueueConnectionError, JobNotFoundError
+from queue_system.config import QueueConfig
+from queue_system.reliability.retry_handler import RetryHandler
+from queue_system.reliability.dead_letter import DeadLetterQueue
 from contracts.processing_job import ProcessingJob, JobResult
 import structlog
 

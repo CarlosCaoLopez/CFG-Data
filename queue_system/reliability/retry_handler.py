@@ -7,7 +7,7 @@ from datetime import datetime
 from typing import Optional
 
 from contracts.processing_job import ProcessingJob
-from queue.config import QueueConfig
+from queue_system.config import QueueConfig
 
 logger = structlog.get_logger(__name__)
 

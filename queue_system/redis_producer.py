@@ -3,22 +3,22 @@
 
 from datetime import datetime, UTC
 from threading import Lock
-from queue.interfaces.producer import QueueProducer
-from queue.streams.raw_data_stream import RawDataStream
-from queue.exceptions import QueueConnectionError
+from abc import ABCMeta
+from queue_system.interfaces.producer import QueueProducer
+from queue_system.streams.raw_data_stream import RawDataStream
+from queue_system.exceptions import QueueConnectionError
 from contracts.raw_market_data import MarketDataBatch, RawTrade, RawMarketMetadata
 from pydantic import ValidationError
+from queue_system.config import QueueConfig
 import structlog
 
 logger = structlog.get_logger()
 
 
-class SingletonMeta(type):
+class SingletonABCMeta(ABCMeta):
     """
-    Thread-safe Singleton metaclass implementation.
-    Ensures only one instance of RedisProducer exists per process.
-
-    Based on: https://refactoring.guru/design-patterns/singleton/python/example
+    Combined metaclass that supports both ABC and Singleton patterns.
+    Resolves metaclass conflict between ABC and Singleton.
     """
 
     _instances = {}
@@ -26,6 +26,7 @@ class SingletonMeta(type):
 
     def __call__(cls, *args, **kwargs):
         """
+        Thread-safe singleton implementation.
         Possible changes to the value of the `__init__` argument do not affect
         the returned instance.
         """
@@ -36,11 +37,14 @@ class SingletonMeta(type):
         return cls._instances[cls]
 
 
-class RedisProducer(QueueProducer, metaclass=SingletonMeta):
+class RedisProducer(QueueProducer, metaclass=SingletonABCMeta):
     """
     Concrete implementation of QueueProducer interface.
     Wraps RawDataStream to publish market data batches.
     """
+
+    _instance = None
+    _initialized = False
 
     def __init__(self, raw_data_stream: RawDataStream):
         """
@@ -49,8 +53,27 @@ class RedisProducer(QueueProducer, metaclass=SingletonMeta):
         Args:
             raw_data_stream: RawDataStream instance connected to Redis
         """
-        self.raw_data_stream = raw_data_stream
-        self.logger = logger.bind(component="redis_producer")
+        if not self._initialized:
+            self.raw_data_stream = raw_data_stream
+            self.logger = logger.bind(component="redis_producer")
+            RedisProducer._initialized = True
+
+    @classmethod
+    async def get_instance(cls, redis_client, config: QueueConfig):
+        """
+        Get or create the singleton instance of RedisProducer.
+
+        Args:
+            redis_client: Redis client instance
+            config: Queue configuration
+
+        Returns:
+            RedisProducer singleton instance
+        """
+        if cls._instance is None:
+            raw_data_stream = RawDataStream(redis_client, config)
+            cls._instance = cls(raw_data_stream)
+        return cls._instance
 
     async def publish_market_batch(self, batch: MarketDataBatch) -> str:
         """

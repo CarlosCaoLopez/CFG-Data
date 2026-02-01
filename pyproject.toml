@@ -3,7 +3,10 @@ name = "polymarket-insider-detection"
 version = "0.1.0"
 description = "Sistema de detección de insider trading en Polymarket"
 authors = []
-package-mode = false
+packages = [
+    { include = "queue_system" },
+    { include = "contracts" },
+]
 
 [tool.poetry.dependencies]
 python = "^3.11"
@@ -39,8 +42,14 @@ structlog = "^24.1"
 pytest = "^8.0"
 pytest-asyncio = "^0.23"
 pytest-cov = "^4.1"
+pytest-mock = "^3.12"
+fakeredis = "^2.21"
+freezegun = "^1.4"
 ruff = "^0.2"
 mypy = "^1.8"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
 
 [build-system]
 requires = ["poetry-core"]
