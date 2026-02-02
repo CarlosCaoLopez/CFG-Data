@@ -14,7 +14,7 @@ Sistema de detección de insider trading en Polymarket mediante análisis de pat
 ```bash
 # Instalar dependencias
 poetry install
-poetry add psycopg2-binary sqlalchemy asyncpg
+poetry add psycopg2-binary sqlalchemy asyncpg celery
 
 # Levantar servicios (Redis + PostgreSQL)
 docker-compose up -d redis postgres
@@ -36,7 +36,7 @@ python -m scripts.run_backfill --days=180 --min-volume=50000
 
 ### Ejecutar workers
 ```bash
-python -m workers.worker --id=worker-1
+poetry run celery -A workers.celery_app worker --loglevel=info
 ```
 
 ### Analizar un mercado específico

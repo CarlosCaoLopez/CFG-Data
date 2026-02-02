@@ -1,9 +1,11 @@
 import os
 import time
 import math
+from dotenv import load_dotenv
 from datetime import datetime
-from celery_app import app
+from workers.celery_app import app
 from contracts.processing_job import JobResult
+
 
 @app.task(bind=True, max_retries=3)
 def calculate_i_score(self, job_dict: dict) -> JobResult:
@@ -12,6 +14,7 @@ def calculate_i_score(self, job_dict: dict) -> JobResult:
     We have a dictionary because Celery serializes to JSON by default
     """
     start_time = time.time()
+    load_dotenv()
 
     job_id = job_dict.get("job_id")
     payload = job_dict.get("payload", {})
@@ -23,7 +26,7 @@ def calculate_i_score(self, job_dict: dict) -> JobResult:
     # No tenemos un winning_outcome. Como sé cuál de los dos ha ganado????????????????????????????????????????????????????????
     is_win = 1 if market.get("closed") and market.get("winning_outcome") == trade.get("outcome") else 0
     p_market = float(trade.get("price"))
-    delta_elo = os.environ.get("ELO_K_FACTOR") * math.log(1 + trade_volume) * (is_win - p_market)
+    delta_elo = float(os.environ.get("ELO_K_FACTOR")) * math.log(1 + trade_volume) * (is_win - p_market)
 
     # Component 2 and 3
     fmt = "%Y-%m-%dT%H:%M:%S.%fZ"
@@ -43,8 +46,8 @@ def calculate_i_score(self, job_dict: dict) -> JobResult:
     p_execution = p_market * (1 + (trade_volume / market_volume)) # Estimation of the price after the trade
     alpha = (p_execution - p_initial) / p_initial if p_initial > 0 else 0
 
-    I_score = os.environ.get("THETA_1") * delta_elo + os.environ.get("THETA_2") / delta_time + \
-        os.environ.get("THETA_3") / account_age + os.environ.get("THETA_4") * math.exp(-H) * alpha
+    I_score = float(os.environ.get("THETA_1")) * delta_elo + float(os.environ.get("THETA_2")) / delta_time + \
+        float(os.environ.get("THETA_3")) / account_age + float(os.environ.get("THETA_4")) * math.exp(-H) * alpha
 
 
 
@@ -52,6 +55,7 @@ def calculate_i_score(self, job_dict: dict) -> JobResult:
     # Aquí debería ir el insert a la base de datos, pero no sé si es buena idea hacer un insert por cada elemento
     # Igual es mejor hacerlo en batches o que se ocupe otro
     # También se podría devolver el I_score
+    print(f"Trabajo {job_id}, {market.get("question")}: {I_score}")
     #############################################################################################################
 
 
