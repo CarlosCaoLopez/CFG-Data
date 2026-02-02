@@ -531,6 +531,71 @@ El publisher NO es un servicio independiente. Se usa internamente desde:
 - `backfill_runner.py` para publicar batches históricos
 - `realtime_listener.py` (futuro) para trades en tiempo real
 
+### Arquitectura de Clases (Ingestion)
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    ingestion/backfill_runner.py                             │
+│                         BackfillRunner                                      │
+│                    (Orquestador principal - CLI)                            │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    │ usa
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                        ingestion/collectors/                                │
+│  ┌───────────────────┐ ┌───────────────────┐ ┌───────────────────────────┐  │
+│  │  MarketsCollector │ │  TradesCollector  │ │   WalletAgeCollector      │  │
+│  │  (Gamma API)      │ │  (Data API)       │ │   (Data API + Polygonscan)│  │
+│  │                   │ │                   │ │                           │  │
+│  │ fetch_closed_     │ │ fetch_trades_     │ │ fetch_wallet_ages_batch() │  │
+│  │ markets()         │ │ for_market()      │ │                           │  │
+│  └─────────┬─────────┘ └─────────┬─────────┘ └─────────────┬─────────────┘  │
+│            │                     │                         │                │
+│            │ dict                │ list[dict]              │ dict           │
+│            ▼                     ▼                         ▼                │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    │ raw data (dicts)
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                   ingestion/normalizers/data_normalizer.py                  │
+│                           DataNormalizer                                    │
+│                                                                             │
+│  normalize_batch(market_raw, trades_raw, wallet_ages_raw)                   │
+│                         │                                                   │
+│                         ▼                                                   │
+│              ┌─────────────────────┐                                        │
+│              │   MarketDataBatch   │  (contracts/raw_market_data.py)        │
+│              │  • metadata         │                                        │
+│              │  • trades[]         │                                        │
+│              │  • wallet_ages{}    │                                        │
+│              │  • ingested_at      │                                        │
+│              └─────────────────────┘                                        │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    │ MarketDataBatch
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                       ingestion/publisher.py                                │
+│                         RedisPublisher                                      │
+│                   (implements QueueProducer)                                │
+│                                                                             │
+│  publish_market_batch(batch) ──────► RawDataStream.add()                    │
+│                                              │                              │
+│                                              ▼                              │
+│                                      Redis Stream                           │
+│                                      "raw_data"                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+**Flujo de datos:**
+1. `BackfillRunner` solicita mercados cerrados a `MarketsCollector`
+2. Para cada mercado, obtiene trades con `TradesCollector`
+3. Extrae wallets de los trades y consulta edades con `WalletAgeCollector`
+4. `DataNormalizer` convierte los dicts raw → `MarketDataBatch`
+5. `RedisPublisher` (ingestion/publisher.py) envía el batch al stream `raw_data`
+
 ---
 
 ## Schema de Base de Datos
