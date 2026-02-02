@@ -803,6 +803,53 @@ pytest tests/integration -v --cov=.
 
 ---
 
+## Verificar Conexión a Redis
+
+### 1. Levantar Redis
+
+```bash
+docker-compose up -d redis
+```
+
+### 2. Monitorear operaciones en tiempo real (opcional)
+
+En una terminal separada, ver TODAS las operaciones de Redis:
+
+```bash
+docker exec -it cfg-data-redis-1 redis-cli MONITOR
+```
+
+### 3. Ejecutar tests de conexión
+
+```bash
+# Test de integración con datos de ejemplo (rápido)
+poetry run python -m scripts.test_ingestion_to_queue
+
+# Test con datos reales de Polymarket
+poetry run python -m scripts.test_publisher
+```
+
+### 4. Inspeccionar el stream directamente
+
+```bash
+# Conectar al CLI de Redis
+docker exec -it cfg-data-redis-1 redis-cli
+
+# Ver longitud del stream
+XLEN raw_data
+
+# Ver los últimos mensajes
+XRANGE raw_data - + COUNT 5
+
+# Ver info del stream
+XINFO STREAM raw_data
+
+# Ver consumer groups
+XINFO GROUPS raw_data
+```
+
+---
+
 ## Checklist de Desarrollo
 
 ### Persona A (Ingestion)

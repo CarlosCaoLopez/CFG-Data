@@ -1,50 +1,57 @@
-# Publisher - Sends MarketDataBatch to Redis
+# Publisher - Sends MarketDataBatch to Redis via queue_system
+# Implements QueueProducer interface from queue_system
 
-import json
-import uuid
-import structlog
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 
 import redis.asyncio as redis
+import structlog
 
-from ingestion.config import get_settings
-from job_queue.interfaces.producer import QueueProducer
+from queue_system.interfaces.producer import QueueProducer
+from queue_system.streams.raw_data_stream import RawDataStream
+from queue_system.config import QueueConfig
 from contracts.raw_market_data import MarketDataBatch, RawTrade, RawMarketMetadata
 
 logger = structlog.get_logger()
-
-# Redis Stream names
-STREAM_RAW_DATA = "stream:raw_market_data"
-STREAM_REALTIME = "stream:realtime_trades"
 
 
 class RedisPublisher(QueueProducer):
     """
     Redis Streams implementation of QueueProducer.
 
-    Publishes MarketDataBatch to Redis for processing by Persona B/C.
-    Uses Redis Streams for reliable message delivery with acknowledgments.
+    Uses queue_system's RawDataStream to publish MarketDataBatch
+    for processing by Persona B (Orchestrator).
     """
 
-    def __init__(self):
-        self.settings = get_settings()
+    def __init__(self, config: QueueConfig | None = None):
+        self.config = config or QueueConfig()
         self._redis: redis.Redis | None = None
+        self._raw_data_stream: RawDataStream | None = None
+        self.logger = logger.bind(component="redis_publisher")
 
     async def _get_redis(self) -> redis.Redis:
         """Lazy Redis connection"""
         if self._redis is None:
-            self._redis = redis.from_url(
-                self.settings.redis_url,
-                encoding="utf-8",
-                decode_responses=True,
-            )
+            # Note: Do NOT use decode_responses=True
+            # queue_system's RawDataStream expects bytes for consistency
+            self._redis = redis.from_url(self.config.redis_url)
         return self._redis
+
+    async def _get_stream(self) -> RawDataStream:
+        """Lazy RawDataStream initialization"""
+        if self._raw_data_stream is None:
+            redis_client = await self._get_redis()
+            self._raw_data_stream = RawDataStream(
+                redis_client,
+                self.config.raw_data_stream_name
+            )
+        return self._raw_data_stream
 
     async def close(self) -> None:
         """Close Redis connection"""
         if self._redis:
-            await self._redis.close()
+            await self._redis.aclose()
             self._redis = None
+            self._raw_data_stream = None
 
     async def publish_market_batch(self, batch: MarketDataBatch) -> str:
         """
@@ -54,44 +61,32 @@ class RedisPublisher(QueueProducer):
             batch: Complete market data including metadata, trades, and wallet ages
 
         Returns:
-            batch_id: Unique identifier for the published batch
+            batch_id: Redis message ID for the published batch
         """
-        r = await self._get_redis()
-
-        batch_id = f"batch_{batch.metadata.market_id[:16]}_{uuid.uuid4().hex[:8]}"
-
-        # Serialize batch to JSON
-        batch_data = batch.model_dump_json()
-
-        # Publish to Redis Stream
-        message = {
-            "batch_id": batch_id,
-            "market_id": batch.metadata.market_id,
-            "type": "market_batch",
-            "priority": "normal",
-            "trades_count": str(len(batch.trades)),
-            "wallets_count": str(len(batch.wallet_ages)),
-            "data": batch_data,
-            "published_at": datetime.now(timezone.utc).isoformat(),
-        }
+        stream = await self._get_stream()
 
         try:
-            stream_id = await r.xadd(STREAM_RAW_DATA, message)
+            message_id = await stream.add(batch)
 
-            logger.info(
+            # Handle bytes response when decode_responses=False
+            if isinstance(message_id, bytes):
+                message_id = message_id.decode()
+
+            self.logger.info(
                 "batch_published",
-                batch_id=batch_id,
-                stream_id=stream_id,
+                batch_id=message_id,
+                stream=self.config.raw_data_stream_name,
                 market_id=batch.metadata.market_id[:20] + "...",
                 trades_count=len(batch.trades),
+                wallets_count=len(batch.wallet_ages),
             )
 
-            return batch_id
+            return message_id
 
-        except redis.RedisError as e:
-            logger.error(
+        except Exception as e:
+            self.logger.error(
                 "batch_publish_failed",
-                batch_id=batch_id,
+                market_id=batch.metadata.market_id[:20] + "...",
                 error=str(e),
             )
             raise
@@ -104,44 +99,46 @@ class RedisPublisher(QueueProducer):
         """
         Publishes a single trade in real-time with high priority.
 
+        Creates a MarketDataBatch with a single trade for immediate processing.
+
         Args:
             trade: Individual trade data
             market: Market metadata for the trade
 
         Returns:
-            job_id: Unique identifier for the created job
+            job_id: Redis message ID for the created job
         """
-        r = await self._get_redis()
+        # Wrap single trade in a MarketDataBatch
+        batch = MarketDataBatch(
+            metadata=market,
+            trades=[trade],
+            wallet_ages={},  # Workers will enrich wallet data if needed
+            ingested_at=datetime.now(UTC),
+        )
 
-        job_id = f"rt_{trade.tx_hash[:16]}_{uuid.uuid4().hex[:8]}"
-
-        # Serialize trade and market
-        message = {
-            "job_id": job_id,
-            "type": "realtime_trade",
-            "priority": "high",
-            "market_id": market.market_id,
-            "trade": trade.model_dump_json(),
-            "market": market.model_dump_json(),
-            "published_at": datetime.now(timezone.utc).isoformat(),
-        }
+        stream = await self._get_stream()
 
         try:
-            stream_id = await r.xadd(STREAM_REALTIME, message)
+            message_id = await stream.add(batch)
 
-            logger.debug(
+            # Handle bytes response when decode_responses=False
+            if isinstance(message_id, bytes):
+                message_id = message_id.decode()
+
+            self.logger.info(
                 "realtime_trade_published",
-                job_id=job_id,
-                stream_id=stream_id,
+                job_id=message_id,
+                stream=self.config.raw_data_stream_name,
                 tx_hash=trade.tx_hash[:20] + "...",
+                market_id=market.market_id[:20] + "...",
             )
 
-            return job_id
+            return message_id
 
-        except redis.RedisError as e:
-            logger.error(
+        except Exception as e:
+            self.logger.error(
                 "realtime_trade_publish_failed",
-                job_id=job_id,
+                tx_hash=trade.tx_hash[:20] + "...",
                 error=str(e),
             )
             raise
@@ -157,35 +154,30 @@ class RedisPublisher(QueueProducer):
             r = await self._get_redis()
             await r.ping()
             return True
-        except redis.RedisError as e:
-            logger.warning("redis_health_check_failed", error=str(e))
+        except Exception as e:
+            self.logger.warning("redis_health_check_failed", error=str(e))
             return False
 
     async def get_stream_info(self) -> dict:
         """
-        Get information about the Redis streams.
+        Get information about the Redis stream.
 
         Returns:
-            Dict with stream lengths and info
+            Dict with stream length and info
         """
-        r = await self._get_redis()
-
         try:
-            raw_data_len = await r.xlen(STREAM_RAW_DATA)
-            realtime_len = await r.xlen(STREAM_REALTIME)
+            stream = await self._get_stream()
+            length = await stream.get_stream_length()
 
             return {
                 "raw_data_stream": {
-                    "name": STREAM_RAW_DATA,
-                    "length": raw_data_len,
-                },
-                "realtime_stream": {
-                    "name": STREAM_REALTIME,
-                    "length": realtime_len,
+                    "name": self.config.raw_data_stream_name,
+                    "length": length,
                 },
             }
-        except redis.RedisError:
-            return {"error": "Could not get stream info"}
+        except Exception as e:
+            self.logger.error("get_stream_info_failed", error=str(e))
+            return {"error": str(e)}
 
     async def __aenter__(self) -> "RedisPublisher":
         return self
