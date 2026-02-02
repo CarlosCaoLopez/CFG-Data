@@ -1,6 +1,6 @@
 # Score ORM model
 # Table: scores
-from datetime import datetime
+from datetime import datetime, UTC
 from decimal import Decimal
 from typing import Optional
 from sqlalchemy import Numeric, DateTime, ForeignKey, Text, Integer, Index
@@ -20,7 +20,7 @@ class Score(Base):
     component_c: Mapped[Decimal] = mapped_column(Numeric)
     component_d: Mapped[Decimal] = mapped_column(Numeric)
     percentile: Mapped[Decimal] = mapped_column(Numeric)
-    calculated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+    calculated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.now(UTC))
 
     # Debugging
     delta_elo: Mapped[Optional[Decimal]] = mapped_column(Numeric)

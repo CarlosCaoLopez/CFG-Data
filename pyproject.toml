@@ -19,7 +19,7 @@ py-clob-client = "^0.1"
 redis = "^5.0"
 
 # Database
-asyncpg = "^0.29"
+asyncpg = ">=0.30.0"
 sqlalchemy = "^2.0"
 alembic = "^1.13"
 
@@ -33,6 +33,7 @@ numpy = "^1.26"
 # Utils
 python-dotenv = "^1.0"
 structlog = "^24.1"
+psycopg2-binary = "^2.9.11"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.0"

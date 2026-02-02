@@ -17,6 +17,7 @@ class Trade(Base):
     outcome: Mapped[str] = mapped_column(String(10))
     price: Mapped[Decimal] = mapped_column(Numeric)
     size_usdc: Mapped[Decimal] = mapped_column(Numeric)
+    size_tokens: Mapped[Decimal] = mapped_column(Numeric)
     tx_hash: Mapped[str] = mapped_column(String(66), unique=True)
 
     # Relaciones
