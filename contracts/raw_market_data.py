@@ -31,6 +31,16 @@ class RawMarketMetadata(BaseModel):
     )
     volume_usdc: float = Field(..., ge=0, description="Total market volume in USDC")
 
+    # Categorization fields
+    category: str | None = Field(
+        None,
+        description="Market category (e.g., 'Sports', 'US-current-affairs', 'Crypto')"
+    )
+    tags: list[str] | None = Field(
+        None,
+        description="List of tag labels from associated events (e.g., ['NBA', 'Basketball'])"
+    )
+
 
 class RawWalletAge(BaseModel):
     """Wallet age information from multiple sources"""

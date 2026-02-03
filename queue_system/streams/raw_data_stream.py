@@ -19,10 +19,10 @@ class RawDataStream:
     async def add(self, batch: MarketDataBatch) -> str:
         """
         Agrega un MarketDataBatch al stream.
-        
+
         Args:
             batch: MarketDataBatch con trades y metadata
-            
+
         Returns:
             message_id: ID del mensaje en Redis (ej: "1234567890123-0")
         """
@@ -30,19 +30,22 @@ class RawDataStream:
             'payload': batch.model_dump_json(),
             'market_id': batch.metadata.market_id,
             'trades_count': str(len(batch.trades)),
-            'ingested_at': batch.ingested_at.isoformat()
+            'ingested_at': batch.ingested_at.isoformat(),
+            # Category field for monitoring/filtering in Redis
+            'category': batch.metadata.category or 'unknown',
         }
-        
+
         message_id = await self.redis.xadd(self.stream_name, message)
-        
+
         logger.info(
             "batch_added_to_stream",
             stream=self.stream_name,
             message_id=message_id,
             market_id=batch.metadata.market_id,
-            trades_count=len(batch.trades)
+            trades_count=len(batch.trades),
+            category=batch.metadata.category,
         )
-        
+
         return message_id
     
     async def read(

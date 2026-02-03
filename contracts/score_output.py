@@ -13,6 +13,16 @@ class WalletScore(BaseModel):
     market_id: str = Field(..., description="Market condition ID")
     trade_tx_hash: str = Field(..., description="Trade transaction hash")
 
+    # Categorization (for analysis grouping and filtering)
+    category: str | None = Field(
+        None,
+        description="Market category (e.g., 'Sports', 'US-current-affairs', 'Crypto')"
+    )
+    tags: list[str] | None = Field(
+        None,
+        description="Market tags for granular filtering (e.g., ['NBA', 'Basketball'])"
+    )
+
     # Final scores
     i_score: float = Field(..., description="Combined insider score")
     percentile: float | None = Field(
@@ -52,6 +62,12 @@ class Alert(BaseModel):
     """Alert generated for suspicious wallet activity"""
     wallet: str = Field(..., description="Wallet address")
     market_id: str = Field(..., description="Market condition ID")
+
+    # Categorization (useful for filtering alerts by domain)
+    category: str | None = Field(
+        None,
+        description="Market category (e.g., 'Sports', 'US-current-affairs', 'Crypto')"
+    )
 
     # Score details
     i_score: float = Field(..., description="Insider score that triggered alert")

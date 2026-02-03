@@ -46,6 +46,12 @@ class DataNormalizer:
         # Parse volume (may be string or number)
         volume = float(raw.get("volume") or 0)
 
+        # Extract category (direct field from market)
+        category = raw.get("category")
+
+        # Extract tags from nested events array
+        tags = self._extract_tags_from_events(raw.get("events"))
+
         return RawMarketMetadata(
             market_id=raw["conditionId"],
             question=raw.get("question", ""),
@@ -53,6 +59,8 @@ class DataNormalizer:
             closed=bool(raw.get("closed", False)),
             outcome_prices=outcome_prices,
             volume_usdc=volume,
+            category=category,
+            tags=tags,
         )
 
     def normalize_trade(self, raw: dict[str, Any], market_id: str) -> RawTrade:
@@ -243,3 +251,35 @@ class DataNormalizer:
                 pass
 
         return None
+
+    def _extract_tags_from_events(self, events: Any) -> list[str] | None:
+        """
+        Extract unique tag labels from the events array.
+
+        The Gamma API returns markets with nested events, and each event
+        can have an array of tags with structure: {id, label, slug}.
+
+        Args:
+            events: Array of event objects from Gamma API
+
+        Returns:
+            List of unique tag labels or None if no tags found
+        """
+        if not events or not isinstance(events, list):
+            return None
+
+        tags = set()
+        for event in events:
+            if isinstance(event, dict):
+                event_tags = event.get("tags", [])
+                if isinstance(event_tags, list):
+                    for tag in event_tags:
+                        if isinstance(tag, dict):
+                            # Tags come as {id, label, slug}
+                            label = tag.get("label") or tag.get("slug")
+                            if label:
+                                tags.add(label)
+                        elif isinstance(tag, str):
+                            tags.add(tag)
+
+        return list(tags) if tags else None

@@ -193,3 +193,20 @@ def get_http_client() -> HTTPClient:
     if _client is None:
         _client = HTTPClient()
     return _client
+
+
+async def close_http_client() -> None:
+    """Close and reset the singleton HTTP client"""
+    global _client
+    if _client is not None:
+        await _client.close()
+        _client = None
+
+
+def reset_http_client() -> None:
+    """
+    Reset the HTTP client singleton (sync version).
+    Use this at the start of tests to ensure a fresh client.
+    """
+    global _client
+    _client = None
