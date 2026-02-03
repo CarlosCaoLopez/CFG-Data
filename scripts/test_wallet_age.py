@@ -21,10 +21,10 @@ async def main():
     trades_collector = TradesCollector()
     age_collector = WalletAgeCollector()
 
-    # Check if Polygonscan API key is configured
-    has_polygonscan = bool(settings.polygonscan_api_key and
-                           settings.polygonscan_api_key != "your_key_here")
-    print(f"\nPolygonscan API key configured: {has_polygonscan}")
+    # Check if Etherscan API key is configured
+    has_etherscan = bool(settings.etherscan_api_key and
+                         settings.etherscan_api_key != "your_key_here")
+    print(f"\nEtherscan API key configured: {has_etherscan}")
 
     client = get_http_client()
     try:
@@ -62,7 +62,7 @@ async def main():
 
         wallet_ages = await age_collector.fetch_wallet_ages_batch(
             wallets,
-            use_polygonscan=has_polygonscan
+            use_polygonscan=has_etherscan
         )
 
         for wallet, age_info in wallet_ages.items():

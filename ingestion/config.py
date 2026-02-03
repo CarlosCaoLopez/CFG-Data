@@ -18,9 +18,10 @@ class IngestionSettings(BaseSettings):
     # ===================
     # API Keys
     # ===================
-    polygonscan_api_key: str = Field(
+    # Etherscan API V2 key (unified for all chains including Polygon)
+    etherscan_api_key: str = Field(
         default="",
-        alias="POLYGONSCAN_API_KEY"
+        validation_alias="ETHERSCAN_API_KEY"
     )
 
     # ===================
@@ -38,8 +39,9 @@ class IngestionSettings(BaseSettings):
         default=100,
         alias="POLYMARKET_REQUESTS_PER_MINUTE"
     )
+    # Etherscan API V2 free tier limit is 3 calls/sec (not 5)
     polygonscan_requests_per_second: int = Field(
-        default=5,
+        default=3,
         alias="POLYGONSCAN_REQUESTS_PER_SECOND"
     )
 
@@ -50,7 +52,12 @@ class IngestionSettings(BaseSettings):
     clob_api_url: str = "https://clob.polymarket.com"
     data_api_url: str = "https://data-api.polymarket.com"
     websocket_url: str = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
-    polygonscan_api_url: str = "https://api.polygonscan.com/api"
+
+    # Etherscan API V2 - unified endpoint for all chains
+    # V1 (deprecated): https://api.polygonscan.com/api
+    # V2 (current): https://api.etherscan.io/v2/api with chainid parameter
+    etherscan_api_url: str = "https://api.etherscan.io/v2/api"
+    polygon_chain_id: int = 137  # Polygon PoS mainnet
 
     # ===================
     # Retry Configuration

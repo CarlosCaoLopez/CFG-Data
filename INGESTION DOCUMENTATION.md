@@ -78,6 +78,8 @@ I_sc = θ₁·(ΔELO) +        θ₂·(1/Δt_res) + θ_3(1/age) + θ_4(slippage�
 | Age (edad wallet)        | `GET /activity?user={wallet}&sortDirection=ASC&limit=1` | primer `timestamp`           |
 | Δt_res (tiempo a cierre) | `GET /markets?condition_ids={id}`                       | `endDate`                    |
 | H_portfolio (entropía)   | `GET /positions?user={wallet}`                          | calcular de `currentValue[]` |
+| **category**             | `GET /markets?condition_ids={id}`                       | `category`                   |
+| **tags**                 | `GET /markets?condition_ids={id}`                       | `events[].tags[].label`      |
 
 ### Consultar Mercados Históricos
 
@@ -94,12 +96,156 @@ GET /positions?market={conditionId}&redeemable=true
 
 ---
 
+## Etherscan API V2 (Wallet Age)
+
+### ⚠️ Migración de Polygonscan a Etherscan V2
+
+La API de Polygonscan (V1) está **deprecada**. Ahora usamos **Etherscan API V2** que unifica todas las chains bajo un solo endpoint.
+
+| Versión | URL | Estado |
+|---------|-----|--------|
+| V1 (deprecated) | `https://api.polygonscan.com/api` | ❌ Ya no funciona |
+| **V2 (actual)** | `https://api.etherscan.io/v2/api` | ✅ En uso |
+
+### Configuración
+
+```bash
+# .env
+ETHERSCAN_API_KEY=tu_api_key_aqui
+
+# Rate limit (free tier = 3 calls/sec)
+POLYGONSCAN_REQUESTS_PER_SECOND=3
+```
+
+### Chain IDs
+
+El parámetro `chainid` especifica qué blockchain consultar:
+
+| Chain | Chain ID | Uso |
+|-------|----------|-----|
+| Ethereum Mainnet | 1 | - |
+| **Polygon PoS** | **137** | ✅ Polymarket |
+| Polygon zkEVM | 1101 | - |
+| Arbitrum | 42161 | - |
+| Base | 8453 | - |
+
+### Endpoint: Primera transacción de una wallet
+
+```
+GET https://api.etherscan.io/v2/api
+    ?chainid=137                    # Polygon
+    &module=account
+    &action=txlist                  # o txlistinternal
+    &address=0x...
+    &startblock=0
+    &endblock=99999999
+    &sort=asc                       # Orden ascendente (más antigua primero)
+    &page=1
+    &offset=1                       # Solo 1 resultado
+    &apikey=TU_API_KEY
+```
+
+### Tipos de transacciones
+
+| Action | Qué detecta |
+|--------|-------------|
+| `txlist` | Transacciones normales (EOA → EOA) |
+| `txlistinternal` | Transacciones internas (via Smart Contracts, bridges) |
+
+**Importante:** Una wallet puede ser fondeada via bridge (ej: Polygon Bridge) y su primera actividad será una transacción **interna**, no normal. Por eso consultamos **ambos** endpoints y tomamos la fecha más antigua.
+
+### Formato de fechas
+
+Todas las fechas se manejan en formato **ISO 8601 UTC**:
+
+```
+YYYY-MM-DDTHH:MM:SS
+```
+
+Ejemplos:
+- `2025-07-30T20:14:59` - Primera tx en Polygon
+- `2025-07-31T11:46:36` - Primera tx en Polymarket
+
+**Regla de coherencia:** `first_tx_polygon` ≤ `first_tx_polymarket` siempre, porque la wallet debe existir en Polygon antes de poder interactuar con Polymarket.
+
+### WalletAgeCollector - Implementación
+
+```python
+# ingestion/collectors/wallet_age_collector.py
+
+class WalletAgeCollector:
+    """
+    Obtiene edad de wallets desde dos fuentes:
+    1. Polymarket Data API - Primera actividad en Polymarket
+    2. Etherscan API V2 - Primera transacción en Polygon blockchain
+    """
+
+    async def fetch_wallet_age(self, wallet: str) -> dict:
+        """
+        Retorna:
+        {
+            "wallet": "0x...",
+            "first_tx_polymarket": datetime | None,
+            "first_tx_polygon": datetime | None,
+        }
+        """
+
+    async def fetch_wallet_ages_batch(self, wallets: set[str]) -> dict[str, dict]:
+        """Procesa múltiples wallets con rate limiting"""
+```
+
+### Manejo de Rate Limits
+
+El código incluye **retry automático** cuando Etherscan devuelve error de rate limit:
+
+```python
+# Si recibe "Max calls per sec rate limit reached (3/sec)":
+# 1. Espera 1 segundo
+# 2. Reintenta (máximo 3 intentos)
+```
+
+### Ejemplo de respuesta
+
+```json
+{
+  "wallet_ages": {
+    "0xabc123...": {
+      "wallet": "0xabc123...",
+      "first_tx_polymarket": "2025-07-31T11:46:36",
+      "first_tx_polygon": "2025-07-30T20:14:59"
+    }
+  }
+}
+```
+
+En este ejemplo:
+- La wallet existía en Polygon desde el 30 de julio 2025
+- Empezó a usar Polymarket 1 día después (31 de julio)
+- **Conclusión:** No es una "cuenta fantasma" creada para un trade específico
+
+### Test del WalletAgeCollector
+
+```bash
+poetry run python -m scripts.test_wallet_age
+```
+
+Output esperado:
+```
+Etherscan API key configured: True
+
+--- Wallet: 0x5117658505d0d... ---
+  First Polymarket tx: 2026-02-03T18:10:36
+  First Polygon tx: 2025-06-18T23:22:51    # 8 meses antes = wallet vieja ✅
+```
+
+---
+
 ## Arquitectura
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │                                                                 │
-│  [Polymarket APIs]    [Polygonscan]    [WebSocket]             │
+│  [Polymarket APIs]    [Etherscan V2]    [WebSocket]            │
 │         │                   │               │                   │
 │         ▼                   ▼               ▼                   │
 │  ┌─────────────────────────────────────────────────┐           │
@@ -152,7 +298,7 @@ polymarket-insider-detection/
 │   │   ├── __init__.py
 │   │   ├── markets_collector.py      # Gamma API - mercados
 │   │   ├── trades_collector.py       # Data API - trades
-│   │   ├── wallet_age_collector.py   # Data API + Polygonscan
+│   │   ├── wallet_age_collector.py   # Data API + Etherscan V2
 │   │   └── realtime_listener.py      # WebSocket
 │   ├── normalizers/
 │   │   ├── __init__.py
@@ -269,11 +415,13 @@ class RawMarketMetadata(BaseModel):
     closed: bool
     outcome_prices: list[float] | None    # [1.0, 0.0] si resuelto
     volume_usdc: float
+    category: str | None                  # "Sports", "US-current-affairs", "Crypto", etc.
+    tags: list[str] | None                # ["NBA", "Basketball"] - extraídos de events
 
 class RawWalletAge(BaseModel):
     wallet: str
     first_tx_polymarket: datetime | None
-    first_tx_polygon: datetime | None     # De Polygonscan
+    first_tx_polygon: datetime | None     # De Etherscan V2 (chainid=137)
 
 class MarketDataBatch(BaseModel):
     metadata: RawMarketMetadata
@@ -329,6 +477,10 @@ class WalletScore(BaseModel):
     market_id: str
     trade_tx_hash: str
 
+    # Categorización (para análisis y filtrado)
+    category: str | None                  # "Sports", "US-current-affairs", etc.
+    tags: list[str] | None                # ["NBA", "Basketball"]
+
     i_score: float
     percentile: float | None
 
@@ -352,6 +504,7 @@ class WalletScore(BaseModel):
 class Alert(BaseModel):
     wallet: str
     market_id: str
+    category: str | None                  # Para filtrar alertas por dominio
     i_score: float
     percentile: float
     alert_type: Literal["P95", "P99", "EXTREME"]
@@ -546,7 +699,7 @@ El publisher NO es un servicio independiente. Se usa internamente desde:
 │                        ingestion/collectors/                                │
 │  ┌───────────────────┐ ┌───────────────────┐ ┌───────────────────────────┐  │
 │  │  MarketsCollector │ │  TradesCollector  │ │   WalletAgeCollector      │  │
-│  │  (Gamma API)      │ │  (Data API)       │ │   (Data API + Polygonscan)│  │
+│  │  (Gamma API)      │ │  (Data API)       │ │   (Data API + Etherscan)  │  │
 │  │                   │ │                   │ │                           │  │
 │  │ fetch_closed_     │ │ fetch_trades_     │ │ fetch_wallet_ages_batch() │  │
 │  │ markets()         │ │ for_market()      │ │                           │  │
@@ -715,7 +868,9 @@ CREATE INDEX idx_alerts_percentile ON alerts(percentile DESC);
 # .env.example
 
 # APIs Externas
-POLYGONSCAN_API_KEY=your_key_here
+# Etherscan API V2 (unified endpoint for all chains including Polygon)
+# Get your key at: https://etherscan.io/myapikey
+ETHERSCAN_API_KEY=your_key_here
 
 # Redis
 REDIS_URL=redis://localhost:6379/0
@@ -736,7 +891,7 @@ ALERT_PERCENTILE_P99=0.99
 
 # Rate limits
 POLYMARKET_REQUESTS_PER_MINUTE=100
-POLYGONSCAN_REQUESTS_PER_SECOND=5
+POLYGONSCAN_REQUESTS_PER_SECOND=3  # Etherscan V2 free tier limit
 
 # Workers
 NUM_WORKERS=4
@@ -861,10 +1016,71 @@ python -m workers.worker --id=worker-1
 # Analizar un mercado específico
 python -m scripts.analyze_market --market-id=0xabc123...
 
-# Tests
+# Tests unitarios (pytest)
 pytest tests/unit -v
 pytest tests/integration -v --cov=.
 ```
+
+---
+
+## Ejecutar Tests de Scripts
+
+El proyecto incluye un **test runner dinámico** que ejecuta todos los scripts `test_*.py` en la carpeta `scripts/`.
+
+### Comandos Básicos
+
+```bash
+# Ejecutar TODOS los tests
+poetry run python -m scripts.run_all_tests
+
+# Ver lista de tests disponibles (sin ejecutar)
+poetry run python -m scripts.run_all_tests --list
+
+# Ejecutar con output detallado
+poetry run python -m scripts.run_all_tests --verbose
+```
+
+### Opciones Avanzadas
+
+```bash
+# Filtrar tests por nombre (ej: solo los de categorías)
+poetry run python -m scripts.run_all_tests --filter categories
+
+# Filtrar tests de mercados
+poetry run python -m scripts.run_all_tests --filter market
+
+# Detenerse en el primer fallo
+poetry run python -m scripts.run_all_tests --stop-on-fail
+
+# Ejecutar en paralelo (experimental)
+poetry run python -m scripts.run_all_tests --parallel
+
+# Combinaciones
+poetry run python -m scripts.run_all_tests --filter normalizer --verbose
+```
+
+### Opciones del Test Runner
+
+| Opción | Descripción |
+|--------|-------------|
+| `--list` | Lista los tests disponibles sin ejecutarlos |
+| `-v, --verbose` | Muestra el output completo de cada test |
+| `--filter PATTERN` | Filtra tests cuyo nombre contenga el patrón |
+| `--stop-on-fail` | Detiene la ejecución en el primer fallo |
+| `--parallel` | Ejecuta tests en paralelo (4 workers) |
+
+### Tests Disponibles
+
+| Script | Descripción | Dependencias |
+|--------|-------------|--------------|
+| `test_markets.py` | Valida collector de mercados | Gamma API |
+| `test_trades.py` | Valida collector de trades | Data API |
+| `test_normalizer.py` | Valida normalización de datos | Ninguna |
+| `test_categories.py` | Valida extracción de categorías | Ninguna |
+| `test_wallet_age.py` | Valida edad de wallets | Etherscan API V2 |
+| `test_publisher.py` | Valida publicación a Redis | Redis |
+| `test_backfill.py` | Valida backfill runner | APIs + Redis |
+| `test_ingestion_to_queue.py` | Test de integración A→B | Redis |
 
 ---
 
@@ -987,7 +1203,7 @@ XINFO GROUPS raw_data
 
 ## Notas Importantes
 
-1. **Rate Limits:** Polymarket ~100 req/min, Polygonscan ~5 req/seg. Implementar delays.
+1. **Rate Limits:** Polymarket ~100 req/min, Etherscan V2 ~3 req/seg (free tier). Implementar delays.
 
 2. **Proxy Wallets:** Los usuarios de Polymarket.com usan proxy wallets. La dirección visible puede no ser la EOA original.
 
@@ -995,14 +1211,14 @@ XINFO GROUPS raw_data
 
 4. **Calibración de θ:** Los valores iniciales (θ₁=1, θ₂=10, θ₃=10, θ₄=5) son estimaciones. Calibrar con datos reales.
 
-5. **Edad de wallet:** La Data API solo muestra actividad en Polymarket. Para edad real en blockchain, usar Polygonscan.
+5. **Edad de wallet:** La Data API solo muestra actividad en Polymarket. Para edad real en blockchain, usar Etherscan API V2 con `chainid=137` (Polygon).
 
 ---
 
 ## 📋 PLAN DE IMPLEMENTACIÓN - PERSONA A (Ingestion)
 
 > **Estado:** ✅ Completado (excepto realtime_listener)
-> **Última actualización:** 2026-01-29
+> **Última actualización:** 2026-02-03
 
 ### Fase 1: Fundamentos ✅
 
@@ -1017,7 +1233,7 @@ XINFO GROUPS raw_data
 |---------|--------|-------------|
 | `ingestion/collectors/markets_collector.py` | ✅ Completado | Gamma API - mercados cerrados con paginación |
 | `ingestion/collectors/trades_collector.py` | ✅ Completado | Data API - trades por mercado (param: `market`) |
-| `ingestion/collectors/wallet_age_collector.py` | ✅ Completado | Data API + Polygonscan - edad de wallets |
+| `ingestion/collectors/wallet_age_collector.py` | ✅ Completado | Data API + Etherscan V2 - edad de wallets |
 | `ingestion/collectors/realtime_listener.py` | ❌ **BLOQUEADO** | WebSocket para trades en tiempo real (ver nota abajo) |
 
 ### Fase 3: Normalización ✅
@@ -1045,12 +1261,12 @@ XINFO GROUPS raw_data
 | `scripts/test_markets.py` | ✅ Verificado | `poetry run python -m scripts.test_markets` |
 | `scripts/test_trades.py` | ✅ Verificado | `poetry run python -m scripts.test_trades` |
 | `scripts/test_normalizer.py` | ✅ Verificado | `poetry run python -m scripts.test_normalizer` |
-| `scripts/test_wallet_age.py` | ⚠️ **PENDIENTE** | `poetry run python -m scripts.test_wallet_age` |
-| `scripts/test_publisher.py` | ⚠️ **PENDIENTE** | `poetry run python -m scripts.test_publisher` |
+| `scripts/test_wallet_age.py` | ✅ Verificado | `poetry run python -m scripts.test_wallet_age` |
+| `scripts/test_publisher.py` | ✅ Verificado | `poetry run python -m scripts.test_publisher` |
 | `scripts/test_backfill.py` | ✅ Verificado | `poetry run python -m scripts.test_backfill` |
 
-> ⚠️ **BLOQUEADO:** `test_wallet_age.py` requiere `POLYGONSCAN_API_KEY` configurada en `.env`.
-> ⚠️ **BLOQUEADO:** `test_publisher.py` requiere Redis (Persona B debe configurar `job_queue/`).
+> ✅ `test_wallet_age.py` funciona con `ETHERSCAN_API_KEY` configurada en `.env`.
+> ✅ `test_publisher.py` funciona con Redis levantado (`docker-compose up -d redis`).
 
 ### ❌ Realtime Listener - Por qué está bloqueado
 
