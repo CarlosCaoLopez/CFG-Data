@@ -37,6 +37,8 @@ services:
       - postgres
     deploy:
       replicas: 4
+    volumes:
+      - ./logs:/app/logs
 
 volumes:
   redis_data:

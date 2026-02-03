@@ -55,7 +55,7 @@ def calculate_i_score(self, job_dict: dict) -> JobResult:
     # Aquí debería ir el insert a la base de datos, pero no sé si es buena idea hacer un insert por cada elemento
     # Igual es mejor hacerlo en batches o que se ocupe otro
     # También se podría devolver el I_score
-    print(f"Trabajo {job_id}, {market.get("question")}: {I_score}")
+    # print(f"Trabajo {job_id}, {market.get("question")}: {I_score}")
     #############################################################################################################
 
 
