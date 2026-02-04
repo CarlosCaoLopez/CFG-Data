@@ -1,10 +1,14 @@
 import os
 import time
 import math
+import asyncio
 from dotenv import load_dotenv
 from datetime import datetime
 from workers.celery_app import app
 from contracts.processing_job import JobResult
+
+from database.connection import async_session
+from database.manager import DatabaseManager
 
 
 @app.task(bind=True, max_retries=3)
@@ -46,8 +50,13 @@ def calculate_i_score(self, job_dict: dict) -> JobResult:
     p_execution = p_market * (1 + (trade_volume / market_volume)) # Estimation of the price after the trade
     alpha = (p_execution - p_initial) / p_initial if p_initial > 0 else 0
 
-    I_score = float(os.environ.get("THETA_1")) * delta_elo + float(os.environ.get("THETA_2")) / delta_time + \
-        float(os.environ.get("THETA_3")) / account_age + float(os.environ.get("THETA_4")) * math.exp(-H) * alpha
+    component_a = delta_elo
+    component_b = 1 / delta_time
+    component_c = 1 / account_age
+    component_d = math.exp(-H) * alpha
+
+    I_score = float(os.environ.get("THETA_1")) * component_a + float(os.environ.get("THETA_2")) * component_b + \
+        float(os.environ.get("THETA_3")) * component_c + float(os.environ.get("THETA_4")) * component_d
 
 
 
@@ -57,6 +66,32 @@ def calculate_i_score(self, job_dict: dict) -> JobResult:
     # También se podría devolver el I_score
     # print(f"Trabajo {job_id}, {market.get("question")}: {I_score}")
     #############################################################################################################
+    async def save_to_db():
+        async with async_session() as session:
+            db = DatabaseManager(session)
+            score = {
+                "wallet": "0x742d35Cc6634C0532925a3b844Bc454e4438f44e", # Yo creo que sobra
+                "trade_id": 1, # Yo creo que sobra, pero podría ser útil
+                "market_id": "cond_123_test_market", # Yo creo que sobra
+                "i_score": I_score,
+                "component_a": component_a,
+                "component_b": component_b,
+                "component_c": component_c,
+                "component_d": component_d,
+                "percentile": 0, # De momento no podemos calcularlo
+
+                "delta_elo": delta_elo,
+                "volume": trade_volume,
+                "age_days": account_age,
+                "delta_t_hours": delta_time,
+                "slippage": alpha,
+                "entropy": H,
+
+            }
+
+            await db.add_score(score)
+
+    asyncio.run(save_to_db())
 
 
     end_time = time.time()

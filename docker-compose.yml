@@ -39,6 +39,8 @@ services:
       replicas: 4
     volumes:
       - ./logs:/app/logs
+    environment:
+      - LOG_DIR=/app/logs
 
 volumes:
   redis_data:
