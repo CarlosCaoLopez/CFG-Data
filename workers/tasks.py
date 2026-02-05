@@ -1,14 +1,14 @@
 import os
 import time
 import math
-import asyncio
+# import asyncio  # Commented out - not used after removing score persistence
 from dotenv import load_dotenv
 from datetime import datetime
 from workers.celery_app import app
 from contracts.processing_job import JobResult
 
-from database.connection import async_session
-from database.manager import DatabaseManager
+# from database.connection import async_session  # Commented out - not used after removing score persistence
+# from database.manager import DatabaseManager  # Commented out - not used after removing score persistence
 
 
 @app.task(bind=True, max_retries=3)
@@ -29,7 +29,7 @@ def calculate_i_score(self, job_dict: dict) -> JobResult:
     trade_volume = float(trade.get("size_usdc", 0))
     # No tenemos un winning_outcome. Como sé cuál de los dos ha ganado????????????????????????????????????????????????????????
     is_win = 1 if market.get("closed") and market.get("winning_outcome") == trade.get("outcome") else 0
-    p_market = float(trade.get("price"))
+    p_market = float(trade.get("prize"))
     delta_elo = float(os.environ.get("ELO_K_FACTOR")) * math.log(1 + trade_volume) * (is_win - p_market)
 
     # Component 2 and 3
@@ -61,37 +61,19 @@ def calculate_i_score(self, job_dict: dict) -> JobResult:
 
 
     #############################################################################################################
-    # Aquí debería ir el insert a la base de datos, pero no sé si es buena idea hacer un insert por cada elemento
-    # Igual es mejor hacerlo en batches o que se ocupe otro
-    # También se podría devolver el I_score
-    # print(f"Trabajo {job_id}, {market.get("question")}: {I_score}")
+    # TODO: Implementar guardado de resultados
+    # La tabla scores fue eliminada. Decidir cómo guardar los resultados del cálculo de I_score:
+    # - Opción 1: Crear nueva tabla de resultados
+    # - Opción 2: Guardar en closed_market_variables
+    # - Opción 3: Devolver solo el resultado sin persistir
     #############################################################################################################
-    async def save_to_db():
-        async with async_session() as session:
-            db = DatabaseManager(session)
-            score = {
-                "wallet": "0x742d35Cc6634C0532925a3b844Bc454e4438f44e", # Yo creo que sobra
-                "trade_id": 1, # Yo creo que sobra, pero podría ser útil
-                "market_id": "cond_123_test_market", # Yo creo que sobra
-                "i_score": I_score,
-                "component_a": component_a,
-                "component_b": component_b,
-                "component_c": component_c,
-                "component_d": component_d,
-                "percentile": 0, # De momento no podemos calcularlo
 
-                "delta_elo": delta_elo,
-                "volume": trade_volume,
-                "age_days": account_age,
-                "delta_t_hours": delta_time,
-                "slippage": alpha,
-                "entropy": H,
-
-            }
-
-            await db.add_score(score)
-
-    asyncio.run(save_to_db())
+    # async def save_to_db():
+    #     async with async_session() as session:
+    #         db = DatabaseManager(session)
+    #         # TODO: Implementar guardado
+    #
+    # asyncio.run(save_to_db())
 
 
     end_time = time.time()

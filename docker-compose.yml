@@ -26,6 +26,16 @@ services:
     depends_on:
       - redis
 
+
+  api:
+    build: .
+    container_name: python_api
+    command: uvicorn api.main:app --host 0.0.0.0 --port 8000
+    expose:
+      - "8000" # Solo visible para otros contenedores
+    networks:
+      - proyect_net
+
   worker:
     build:
       context: .
@@ -35,6 +45,9 @@ services:
     depends_on:
       - redis
       - postgres
+      - api
+    networks:
+      - proyect_net
     deploy:
       replicas: 4
     volumes:
@@ -42,6 +55,12 @@ services:
     environment:
       - LOG_DIR=/app/logs
 
+
+
 volumes:
   redis_data:
   postgres_data:
+
+networks:
+  proyect_net:
+    driver: bridge
