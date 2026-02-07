@@ -77,15 +77,41 @@ class DatabaseManager:
         await self.session.commit()
 
 
+    async def add_market_batch(self, markets: list[dict]):
+        """Inserts a batch of markets in a single statement."""
+        stmt = insert(Market).values(markets)
+        await self.session.execute(stmt)
+        await self.session.commit()
+
+    async def add_wallet_batch(self, wallets: list[dict]):
+        """Inserts a batch of wallets in a single statement."""
+        stmt = insert(Wallet).values(wallets)
+        await self.session.execute(stmt)
+        await self.session.commit()
+
+    async def add_trade_batch(self, trades: list[dict]):
+        """Inserts a batch of trades in a single statement."""
+        stmt = insert(Trade).values(trades)
+        await self.session.execute(stmt)
+        await self.session.commit()
+
+    async def add_insider_trade_batch(self, insider_trades: list[dict]):
+        """Inserts a batch of insider trades in a single statement."""
+        stmt = insert(InsidersTrade).values(insider_trades)
+        await self.session.execute(stmt)
+        await self.session.commit()
+
+
     async def upsert_closed_market_variables(self, cmv_data: dict):
         """
-        Inserts or updates closed market variables (composite key: wallet + market_id)
+        This function should not be used now
+        Inserts or updates closed market variables (composite key: wallet_id + market_id + trade_id)
         """
         stmt = insert(ClosedMarketVariables).values(**cmv_data)
 
         # What to do if the composite primary key exists
         stmt = stmt.on_conflict_do_update(
-            index_elements=['wallet', 'market_id'],
+            index_elements=['wallet_id', 'market_id', 'trade_id'],
             set_={
                 "delta_t": stmt.excluded.delta_t,
                 "age": stmt.excluded.age,

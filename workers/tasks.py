@@ -1,14 +1,19 @@
 import os
 import time
 import math
-# import asyncio  # Commented out - not used after removing score persistence
+import asyncio
+from pathlib import Path
 from dotenv import load_dotenv
 from datetime import datetime
+from sqlalchemy import text
 from workers.celery_app import app
 from contracts.processing_job import JobResult
+from database.connection import async_session
 
-# from database.connection import async_session  # Commented out - not used after removing score persistence
 # from database.manager import DatabaseManager  # Commented out - not used after removing score persistence
+
+# Ruta al script SQL de compute_variables
+_SQL_DIR = Path(__file__).resolve().parent.parent / "scripts" / "sql"
 
 
 @app.task(bind=True, max_retries=3)
@@ -83,5 +88,38 @@ def calculate_i_score(self, job_dict: dict) -> JobResult:
         "job_id": job_id,
         "success": True,
         "scores_calculated": 1,
+        "processing_time_ms": processing_time_ms
+    }
+
+
+@app.task(bind=True, max_retries=3)
+def compute_variables(self, market_id: str) -> dict:
+    """
+    Calcula las variables intermedias de un market cerrado y las guarda en closed_market_variables.
+    Ejecuta el script SQL compute_variables.sql con el market_id como parámetro.
+    """
+    start_time = time.time()
+
+    sql_path = _SQL_DIR / "compute_variables.sql"
+    sql_text = sql_path.read_text(encoding="utf-8")
+
+    async def _execute():
+        async with async_session() as session:
+            result = await session.execute(
+                text(sql_text),
+                {"market_id": market_id}
+            )
+            rows_affected = result.rowcount
+            await session.commit()
+            return rows_affected
+
+    rows = asyncio.run(_execute())
+
+    processing_time_ms = int((time.time() - start_time) * 1000)
+
+    return {
+        "market_id": market_id,
+        "success": True,
+        "rows_inserted": rows,
         "processing_time_ms": processing_time_ms
     }
