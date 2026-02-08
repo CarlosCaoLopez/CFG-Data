@@ -3,15 +3,12 @@ name = "polymarket-insider-detection"
 version = "0.1.0"
 description = "Sistema de detección de insider trading en Polymarket"
 authors = []
-<<<<<<< HEAD
 
 packages = [
     { include = "queue_system" },
     { include = "contracts" },
 ]
 
-=======
->>>>>>> c-workers
 
 [tool.poetry.dependencies]
 python = "^3.11"
