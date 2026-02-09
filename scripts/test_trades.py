@@ -72,7 +72,7 @@ async def main():
             print(f"--- Trade {i} ---")
             print(f"  conditionId: {trade_condition[:30]}... {'✓' if matches_market else '✗ MISMATCH'}")
             print(f"  txHash: {str(tx_hash)[:20]}...")
-            print(f"  wallet: {str(wallet)[:20]}...")
+            print(f"  wallet: {wallet}")
             print(f"  side: {trade.get('side', 'N/A')}")
             print(f"  outcome: {trade.get('outcome', 'N/A')}")
             print(f"  price: {price:.4f}")
@@ -84,6 +84,8 @@ async def main():
         # Extract unique wallets
         wallets = trades_collector.extract_wallets_from_trades(trades)
         print(f"Unique wallets in these trades: {len(wallets)}")
+        for w in sorted(wallets):
+            print(f"  {w}")
 
     finally:
         await client.close()

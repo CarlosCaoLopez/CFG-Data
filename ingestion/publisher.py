@@ -9,7 +9,15 @@ import structlog
 from queue_system.interfaces.producer import QueueProducer
 from queue_system.streams.raw_data_stream import RawDataStream
 from queue_system.config import QueueConfig
-from contracts.raw_market_data import MarketDataBatch, RawTrade, RawMarketMetadata
+import json
+
+from contracts.raw_market_data import (
+    MarketDataBatch,
+    RawTrade,
+    RawMarketMetadata,
+    InsiderTradeData,
+)
+from ingestion.config import get_settings
 
 logger = structlog.get_logger()
 
@@ -139,6 +147,112 @@ class RedisPublisher(QueueProducer):
             self.logger.error(
                 "realtime_trade_publish_failed",
                 tx_hash=trade.tx_hash[:20] + "...",
+                error=str(e),
+            )
+            raise
+
+    async def publish_closed_market_batch(self, batch: MarketDataBatch) -> str:
+        """
+        Publishes a complete closed-market batch to 'closed_markets' stream.
+        Used by L1 (MarketCloseListener) when a tracked market closes.
+
+        Args:
+            batch: Complete market data with trades, wallet ages, winning_outcome
+
+        Returns:
+            message_id: Redis stream message ID
+        """
+        settings = get_settings()
+        redis_client = await self._get_redis()
+
+        message = {
+            "payload": batch.model_dump_json(),
+            "market_id": batch.metadata.market_id,
+            "trades_count": str(len(batch.trades)),
+            "wallets_count": str(len(batch.wallet_ages)),
+            "category": batch.metadata.category or "unknown",
+            "winning_outcome": batch.metadata.winning_outcome or "unknown",
+            "ingested_at": batch.ingested_at.isoformat(),
+        }
+
+        try:
+            msg_id = await redis_client.xadd(settings.closed_markets_stream, message)
+            message_id = msg_id.decode() if isinstance(msg_id, bytes) else str(msg_id)
+
+            self.logger.info(
+                "closed_market_batch_published",
+                message_id=message_id,
+                stream=settings.closed_markets_stream,
+                market_id=batch.metadata.market_id[:20] + "...",
+                trades_count=len(batch.trades),
+                wallets_count=len(batch.wallet_ages),
+                winning_outcome=batch.metadata.winning_outcome,
+            )
+
+            return message_id
+
+        except Exception as e:
+            self.logger.error(
+                "closed_market_batch_publish_failed",
+                market_id=batch.metadata.market_id[:20] + "...",
+                error=str(e),
+            )
+            raise
+
+    async def publish_insider_trades(
+        self,
+        wallet: str,
+        trades: list[RawTrade],
+        categories_insider: list[str],
+    ) -> str:
+        """
+        Publishes insider wallet trades to 'insider_trades' stream.
+        Used by L2 (InsiderTradesListener) when new trades are found.
+
+        Args:
+            wallet: Insider wallet address
+            trades: Filtered trades for this wallet
+            categories_insider: Categories in which this wallet is insider
+
+        Returns:
+            message_id: Redis stream message ID
+        """
+        settings = get_settings()
+        redis_client = await self._get_redis()
+
+        insider_data = InsiderTradeData(
+            wallet=wallet,
+            trades=trades,
+            categories_insider=categories_insider,
+        )
+
+        message = {
+            "payload": insider_data.model_dump_json(),
+            "wallet": wallet,
+            "trades_count": str(len(trades)),
+            "categories": json.dumps(categories_insider),
+            "published_at": insider_data.published_at.isoformat(),
+        }
+
+        try:
+            msg_id = await redis_client.xadd(settings.insider_trades_stream, message)
+            message_id = msg_id.decode() if isinstance(msg_id, bytes) else str(msg_id)
+
+            self.logger.info(
+                "insider_trades_published",
+                message_id=message_id,
+                stream=settings.insider_trades_stream,
+                wallet=wallet[:10] + "...",
+                trades_count=len(trades),
+                categories=categories_insider,
+            )
+
+            return message_id
+
+        except Exception as e:
+            self.logger.error(
+                "insider_trades_publish_failed",
+                wallet=wallet[:10] + "...",
                 error=str(e),
             )
             raise

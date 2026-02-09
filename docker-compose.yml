@@ -23,10 +23,25 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    command: python -m ingestion.backfill_runner
+    command: python -m ingestion.main
     env_file: .env
+    environment:
+      - REDIS_URL=redis://redis:6379/0
     depends_on:
       - redis
+
+  backfill:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: python -m ingestion.backfill_runner
+    env_file: .env
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+    depends_on:
+      - redis
+    profiles:
+      - tools
 
   worker:
     build:

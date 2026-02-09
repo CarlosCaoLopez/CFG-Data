@@ -60,6 +60,66 @@ class IngestionSettings(BaseSettings):
     polygon_chain_id: int = 137  # Polygon PoS mainnet
 
     # ===================
+    # CATEGORIAS_DE_INTERES (global filter)
+    # Set via .env: CATEGORIAS_DE_INTERES="Sports,Crypto,US-current-affairs,Pop Culture"
+    # ===================
+    categorias_de_interes_str: str = Field(
+        default="Sports,Crypto,US-current-affairs,Pop Culture",
+        validation_alias="CATEGORIAS_DE_INTERES",
+        description="Comma-separated tags/categories to monitor.",
+    )
+
+    @computed_field
+    @property
+    def categorias_de_interes(self) -> list[str]:
+        """Parse comma-separated string into list"""
+        return [s.strip() for s in self.categorias_de_interes_str.split(",") if s.strip()]
+
+    # ===================
+    # L1: Market Close Listener
+    # ===================
+    l1_market_poll_interval_seconds: int = Field(
+        default=60,
+        description="How often L1 checks tracked markets for closure (seconds)",
+    )
+    l1_gamma_discovery_interval_seconds: int = Field(
+        default=900,
+        description="How often L1 discovers markets via Gamma API (seconds, 15 min)",
+    )
+    l1_min_volume_usdc: float = Field(
+        default=10000.0,
+        description="Minimum volume for L1 to track a market",
+    )
+
+    # ===================
+    # L2: Insider Trades Listener
+    # ===================
+    l2_poll_interval_seconds: int = Field(
+        default=30,
+        description="How often L2 polls for new insider wallet trades (seconds)",
+    )
+    l2_commands_stream: str = Field(
+        default="insider_commands",
+        description="Redis stream for T3 → L2 commands",
+    )
+    l2_commands_consumer_group: str = Field(
+        default="ingestion_l2",
+        description="Consumer group for insider_commands stream",
+    )
+
+    # ===================
+    # Redis Streams (A → B)
+    # ===================
+    closed_markets_stream: str = Field(
+        default="closed_markets",
+        description="Redis stream for L1 closed market batches",
+    )
+    insider_trades_stream: str = Field(
+        default="insider_trades",
+        description="Redis stream for L2 insider trade data",
+    )
+
+    # ===================
     # Retry Configuration
     # ===================
     max_retries: int = 3
@@ -75,6 +135,53 @@ class IngestionSettings(BaseSettings):
     backfill_min_volume_usdc: float = 50000.0
     backfill_batch_size: int = 50
     checkpoint_file: str = ".backfill_checkpoint.json"
+
+    # ===================
+    # Realtime Listener Configuration
+    # ===================
+    # WebSocket RPC endpoints for Polygon (fallback order)
+    polygon_wss_endpoints: list[str] = Field(
+        default=[
+            "wss://polygon-bor-rpc.publicnode.com",
+            "wss://rpc.ankr.com/polygon/ws",
+            "wss://polygon.drpc.org",
+        ],
+        description="WebSocket RPC endpoints for Polygon (fallback order)"
+    )
+
+    # WebSocket reconnection settings
+    ws_reconnect_delay_base: float = Field(
+        default=1.0,
+        description="Base delay for WebSocket reconnection (seconds)"
+    )
+    ws_reconnect_delay_max: float = Field(
+        default=60.0,
+        description="Maximum delay for WebSocket reconnection (seconds)"
+    )
+    ws_reconnect_max_attempts: int = Field(
+        default=10,
+        description="Max reconnection attempts before switching to polling"
+    )
+
+    # Polling settings (fallback mode)
+    polling_interval_seconds: int = Field(
+        default=15,
+        description="Interval between polling requests when in fallback mode"
+    )
+    polling_blocks_per_request: int = Field(
+        default=100,
+        description="Number of blocks to query per polling request"
+    )
+
+    # Deduplication cache
+    dedup_cache_size: int = Field(
+        default=10000,
+        description="Max number of tx_hashes to keep in dedup cache"
+    )
+    dedup_cache_ttl_seconds: int = Field(
+        default=3600,
+        description="TTL for dedup cache entries (1 hour)"
+    )
 
     # ===================
     # Computed Properties

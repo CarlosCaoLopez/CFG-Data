@@ -2,7 +2,7 @@
 # Defines data structures for raw market data ingestion
 
 from pydantic import BaseModel, Field
-from datetime import datetime
+from datetime import datetime, UTC
 from typing import Literal
 
 
@@ -17,6 +17,10 @@ class RawTrade(BaseModel):
     price: float = Field(..., ge=0.0, le=1.0, description="Price (0.0 - 1.0)")
     size_usdc: float = Field(..., ge=0, description="Trade size in USDC")
     size_tokens: float = Field(..., ge=0, description="Trade size in tokens")
+    last_trade: bool = Field(
+        default=False,
+        description="True if this is the last trade before market close"
+    )
 
 
 class RawMarketMetadata(BaseModel):
@@ -30,6 +34,10 @@ class RawMarketMetadata(BaseModel):
         description="Final outcome prices if resolved (e.g., [1.0, 0.0])"
     )
     volume_usdc: float = Field(..., ge=0, description="Total market volume in USDC")
+    winning_outcome: str | None = Field(
+        None,
+        description="Winning outcome ('Yes'/'No'), derived from outcome_prices at close"
+    )
 
     # Categorization fields
     category: str | None = Field(
@@ -51,7 +59,7 @@ class RawWalletAge(BaseModel):
     )
     first_tx_polygon: datetime | None = Field(
         None,
-        description="First transaction on Polygon (from Polygonscan)"
+        description="First transaction on Polygon (from Etherscan V2)"
     )
 
 
@@ -66,4 +74,46 @@ class MarketDataBatch(BaseModel):
     ingested_at: datetime = Field(
         default_factory=datetime.utcnow,
         description="When this batch was ingested"
+    )
+
+
+# ============================================================
+# Insider Trades contracts (L2 <-> T3)
+# ============================================================
+
+
+class InsiderTradeCommand(BaseModel):
+    """
+    Command from Task T3 to Listener L2.
+    Published to Redis stream 'insider_commands'.
+    """
+    wallet: str = Field(..., description="Wallet address to monitor")
+    categories_insider: list[str] = Field(
+        ...,
+        description="Categories in which the wallet is flagged as insider"
+    )
+    market_ids_insider: list[str] | None = Field(
+        None,
+        description="Specific market IDs where insider behavior was detected"
+    )
+    command_type: Literal["ADD_WALLET", "UPDATE_CATEGORIES", "REMOVE_WALLET"] = Field(
+        default="ADD_WALLET",
+        description="Type of command"
+    )
+
+
+class InsiderTradeData(BaseModel):
+    """
+    Data published by Listener L2 to Redis stream 'insider_trades'.
+    Contains trades from a monitored insider wallet filtered by categories.
+    """
+    wallet: str = Field(..., description="Insider wallet address")
+    trades: list[RawTrade] = Field(..., description="Filtered trades for this wallet")
+    categories_insider: list[str] = Field(
+        ...,
+        description="Categories in which this wallet is insider"
+    )
+    published_at: datetime = Field(
+        default_factory=lambda: datetime.now(UTC),
+        description="When this data was published"
     )

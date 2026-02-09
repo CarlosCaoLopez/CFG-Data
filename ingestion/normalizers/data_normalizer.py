@@ -283,3 +283,41 @@ class DataNormalizer:
                             tags.add(tag)
 
         return list(tags) if tags else None
+
+    def compute_winning_outcome(
+        self, outcome_prices: list[float] | None
+    ) -> str | None:
+        """
+        Derive winning outcome from final outcome prices.
+
+        Args:
+            outcome_prices: Final prices e.g. [1.0, 0.0] or [0.0, 1.0]
+
+        Returns:
+            "Yes" if first outcome won, "No" if second, None if unresolved
+        """
+        if not outcome_prices or len(outcome_prices) < 2:
+            return None
+        if outcome_prices[0] >= 0.99:
+            return "Yes"
+        elif outcome_prices[1] >= 0.99:
+            return "No"
+        return None
+
+    def mark_last_trade(self, trades: list) -> list:
+        """
+        Mark the trade with the latest timestamp as last_trade=True.
+        All other trades get last_trade=False.
+
+        Args:
+            trades: List of RawTrade objects
+
+        Returns:
+            Same list with last_trade flags set
+        """
+        if not trades:
+            return trades
+        max_ts = max(t.timestamp for t in trades)
+        for trade in trades:
+            trade.last_trade = (trade.timestamp == max_ts)
+        return trades

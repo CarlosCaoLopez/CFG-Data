@@ -8,14 +8,21 @@ class QueueConfig(BaseSettings):
 
     redis_url: str = "redis://localhost:6379/0"
 
-    # Streams
+    # Streams (A → B)
     raw_data_stream_name: str = "raw_data"
+    closed_markets_stream_name: str = "closed_markets"
+    insider_trades_stream_name: str = "insider_trades"
+    insider_commands_stream_name: str = "insider_commands"
+
+    # Streams (B → C)
     jobs_stream_name: str = "jobs_stream"
     results_stream_name: str = "results_stream"
 
-    # Consumer group
+    # Consumer groups
     consumer_group_name: str = "workers"
     consumer_name: str = "orchestrator"
+    orchestrator_consumer_group: str = "scheduler"
+    insider_trades_consumer_group: str = "tasks"
 
     # Limits
     max_pending_jobs: int = 1000

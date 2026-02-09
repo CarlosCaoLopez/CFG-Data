@@ -163,7 +163,7 @@ class TradesCollector:
 
             try:
                 response = await client.get(
-                    self.base_url,
+                    self.activity_url,
                     params=params,
                     api_type=APIType.POLYMARKET,
                 )
@@ -175,7 +175,16 @@ class TradesCollector:
                 )
                 raise
 
-            trades = response if isinstance(response, list) else []
+            if not isinstance(response, list):
+                logger.warning(
+                    "unexpected_wallet_trades_response_format",
+                    wallet=wallet[:10] + "...",
+                    response_type=type(response).__name__,
+                    response_preview=str(response)[:200],
+                )
+                break
+
+            trades = response
 
             if not trades:
                 break

@@ -2,6 +2,16 @@
 
 ---
 
+## 📐 Fuente de Verdad: Arquitectura
+
+La arquitectura de referencia es **`ARQUITECTURA SERVILLETA.md`**.
+Este documento define las 6 capas del sistema (A, B, C, D, E, T) y es la fuente de verdad para el diseño.
+
+**Persona A (este agente)** implementa la **Capa (A) Ingesta de Datos** y puede modificar
+la publicación a Redis (Capa B) cuando sea necesario para la interfaz A → B.
+
+---
+
 ## ⚠️ RESTRICCIÓN DE ROL: PERSONA A (INGESTION)
 
 **Eres la Persona A.** Tu responsabilidad es ÚNICAMENTE la capa de **Ingestion**.
@@ -22,38 +32,39 @@
 Usas `queue/interfaces/producer.py` (QueueProducer) para publicar datos.
 NO implementas esa interface, solo la consumes.
 
+### 🧪 Ejecución de Tests:
+**Los scripts de test (`scripts/test_*.py`) SIEMPRE los ejecuta el usuario.**
+NO ejecutes comandos `poetry run python -m scripts.test_*` directamente.
+Solo proporciona el comando y espera a que el usuario ejecute y comparta los resultados.
+
 ---
 
 ## Visión General
 
-Sistema de detección de insider trading en Polymarket mediante análisis de patrones de comportamiento. Calcula un **I_score** para cada trade que combina tres señales: impacto financiero, firma temporal sospechosa, y agresividad focalizada.
+Sistema de detección de insider trading en Polymarket. Se organiza en **6 capas** (A, B, C, D, E, T). Al cierre de un market, se calculan 5 variables estadísticas por wallet/trade. El **Motor de Cálculo (D)** ajusta distribuciones, obtiene regiones críticas y aplica el **criterio de insider**: una wallet que esté en las 5 regiones críticas simultáneamente se marca como insider.
 
 ---
 
-## La Fórmula Maestra
+## Variables del Criterio de Insider
 
-```
-I_sc = θ₁·(ΔELO) +        θ₂·(1/Δt_res) + θ_3(1/age) + θ_4(slippage·e^(-H_portfolio))
-      \_________/         \________________________/   \_________________________/
-      A. Impacto del           B. Factor              C. Agresividad
-        Éxito                  Fantasma               Focalizada
-```
+Al cierre de un market, la **Task T2** calcula estas variables via SQL (tabla temporal `Closed_Market_Variables`):
 
-### Componentes
+| Variable | Fórmula | Unidad |
+|----------|---------|--------|
+| **Δt** | `Market.EndDate - Trade.Timestamp` | Horas |
+| **Age** | `Max(1, Market.EndDate - Wallet.First_seen_at)` | Días |
+| **Winning_volume** | `Σ(Trade.Size_usdc × Trade.Prize × ±1)` donde ±1 = +1 si `Trade.Outcome == Market.WinningOutcome`, -1 si no | USDC |
+| **α_slippage** | `(Prize × (1 + Size_usdc / Market.Volume_usdc) - Prize) / Prize` (0 si Prize=0) | % (0-1) |
+| **H (entropía)** | `-Σ(P × log(P))` donde P = volumen wallet en categoría / volumen total wallet | - |
 
-| Componente | Qué detecta                   | Variables                                                  |
-| ---------- | ----------------------------- | ---------------------------------------------------------- |
-| **A**      | Ganó mucho contra las odds    | ΔELO = K_base×ln(1+V)×(S-Prob_mkt), V = volumen USDC       |
-| **B**      | Cuenta nueva + apuesta tardía | Age = días desde primera tx, Δt_res = horas hasta cierre   |
-| **C**      | Urgencia + concentración      | α_slippage = impacto en precio, H = entropía del portfolio |
+### Criterio de Insider (Motor D)
 
-### Interpretación
+El Motor de Cálculo (implementado en **R** con Plumber) recibe `{IDWallet, IDMarket, Δt, Age, Winning_volume, α_slippage, H}` y:
 
-| I_score          | Perfil                            |
-| ---------------- | --------------------------------- |
-| Bajo             | Ruido de fondo, trader normal     |
-| Medio-Alto (P95) | Posible forecaster hábil, revisar |
-| Muy Alto (P99)   | Probable insider, investigar      |
+1. Ajusta bondad de distribución para cada variable (periódicamente)
+2. Obtiene **región crítica** para cada variable
+3. Aplica criterio: wallet en las **5 regiones críticas** simultáneamente → **insider**
+4. Devuelve `{IDMarket, IDWallet, Categories_insider, MarketIDs_insider}` via HTTP a la REST API (E)
 
 ---
 
@@ -78,8 +89,26 @@ I_sc = θ₁·(ΔELO) +        θ₂·(1/Δt_res) + θ_3(1/age) + θ_4(slippage�
 | Age (edad wallet)        | `GET /activity?user={wallet}&sortDirection=ASC&limit=1` | primer `timestamp`           |
 | Δt_res (tiempo a cierre) | `GET /markets?condition_ids={id}`                       | `endDate`                    |
 | H_portfolio (entropía)   | `GET /positions?user={wallet}`                          | calcular de `currentValue[]` |
-| **category**             | `GET /markets?condition_ids={id}`                       | `category`                   |
-| **tags**                 | `GET /markets?condition_ids={id}`                       | `events[].tags[].label`      |
+| **category**             | `GET /events/{event_id}`                                | `category` (solo cerrados)   |
+| **tags**                 | `GET /events/{event_id}`                                | `tags[].label` (siempre)     |
+
+### ⚠️ Quirk de la Gamma API: category y tags
+
+La API retorna **schemas diferentes** según el tipo de query:
+
+| Query | `category` | `tags` |
+|-------|-----------|--------|
+| `?closed=true` | ✅ En market Y event | ✅ En event (a veces) |
+| `?condition_ids=X` | ❌ No incluido | ❌ No incluido |
+| `?clob_token_ids=X` | ❌ No incluido | ❌ No incluido |
+| `GET /events/{id}` | ✅ Solo cerrados | ✅ **Siempre** (activos y cerrados) |
+
+**Solución implementada (realtime):**
+1. `GET /markets?clob_token_ids=X` → obtener `conditionId` + `events[0].id`
+2. `GET /events/{event_id}` → obtener `tags[]` (siempre) + `category` (si cerrado)
+3. Merge tags/category al dict del market antes de normalizar
+
+**Para backfill:** `?closed=true` ya devuelve category y no necesita la segunda llamada.
 
 ### Consultar Mercados Históricos
 
@@ -240,39 +269,174 @@ Etherscan API key configured: True
 
 ---
 
-## Arquitectura
+## Arquitectura (6 Capas)
+
+| Capa | Nombre | Tecnología | Responsabilidad |
+|------|--------|------------|-----------------|
+| **(A)** | Ingesta de Datos | Python | Lee APIs de Polymarket/Polygon, filtra por CATEGORIAS_DE_INTERES, publica a Redis |
+| **(B)** | Colas Redis | Python | Intermediario: recibe datos de (A), los envía a (T) Tasks |
+| **(C)** | Base de Datos | PostgreSQL | Almacena Markets, Trades, Wallets, Insiders_Trades, Closed_Market_Variables |
+| **(D)** | Motor de Cálculo | R (Plumber) | Ajusta distribuciones, calcula regiones críticas, aplica criterio de insider |
+| **(E)** | REST API | Python | Recibe resultado de (D), actualiza BD (marca insiders), limpia datos temporales |
+| **(T)** | Tasks | Python (Celery) | T1: Redis→BD, T2: SQL variables al cierre, T3: BD→L2, T4: limpieza trades |
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                                                                 │
-│  [Polymarket APIs]    [Etherscan V2]    [WebSocket]            │
-│         │                   │               │                   │
-│         ▼                   ▼               ▼                   │
-│  ┌─────────────────────────────────────────────────┐           │
-│  │              PERSONA A: INGESTION               │           │
-│  │  • Collectors (REST + WebSocket)                │           │
-│  │  • Normalización a contratos                    │           │
-│  │  • Rate limiting, retry, checkpointing          │           │
-│  └──────────────────────┬──────────────────────────┘           │
-│                         │ MarketDataBatch                       │
-│                         ▼                                       │
-│  ┌─────────────────────────────────────────────────┐           │
-│  │           PERSONA B: QUEUE + ORCHESTRATION      │           │
-│  │  • Redis Streams                                │           │
-│  │  • Job creation, priorización                   │           │
-│  │  • Retry logic, dead letter queue               │           │
-│  └──────────────────────┬──────────────────────────┘           │
-│                         │ ProcessingJob                         │
-│                         ▼                                       │
-│  ┌─────────────────────────────────────────────────┐           │
-│  │            PERSONA C: WORKERS + DB              │           │
-│  │  • Cálculo de I_score                           │           │
-│  │  • PostgreSQL + TimescaleDB                     │           │
-│  │  • Generación de alertas                        │           │
-│  └─────────────────────────────────────────────────┘           │
-│                                                                 │
-└─────────────────────────────────────────────────────────────────┘
+┌─────────────────┐     ┌─────────────────┐
+│ L1 Listener     │     │ L2 Listener     │◄────────┐
+│ Markets         │     │ Insiders        │         │
+└────────┬────────┘     └────────┬────────┘         │
+         │                       │                  │
+         └───────────┬───────────┘                  │
+                     ▼                              │
+              ┌─────────────┐                       │
+              │  (B) REDIS  │                       │
+              └──────┬──────┘                       │
+                     │                              │
+                     ▼                              │
+              ┌─────────────┐                       │
+              │   (T) T1    │                       │
+              └──────┬──────┘                       │
+                     │                              │
+                     ▼                              │
+              ┌─────────────┐                       │
+┌─────────────│   (C) BD    │◄──────┐               │
+│             └──────┬──────┘       │               │
+│                    │              │               │
+│        ┌───────────│              │               │
+│        ▼           ▼              │               │
+│  ┌─────────┐ ┌─────────┐ ┌─────────┐             │
+│  │ (T) T2  │ │ (T) T3  │ │ (T) T4  │             │
+│  └─────────┘ └────┬────┘ └──────▲──┘             │
+└───┐               │             │                │
+    │               └─────────────┼────────────────┘
+    ▼                             │
+  ┌───────────────┐               │
+  │ (D) Motor     │               │
+  │    Cálculo    │               │
+  └───────┬───────┘               │
+          │                       │
+          ▼                       │
+┌───────────────┐                 │
+│ (E) REST API  │─────────────────┘
+└───────────────┘
 ```
+
+### Redis Streams — Infraestructura Completa
+
+#### Streams y Flujos
+
+| Stream | Productor | Formato | Consumer Group | Consumidor |
+|--------|-----------|---------|----------------|------------|
+| `raw_data` | **Backfill** (CLI) | `MarketDataBatch` | `scheduler` | QueueOrchestrator → `jobs_stream` |
+| `closed_markets` | **L1** (MarketCloseListener) | `MarketDataBatch` | `scheduler` | QueueOrchestrator → `jobs_stream` |
+| `insider_trades` | **L2** (InsiderTradesListener) | `InsiderTradeData` | `tasks` | T1 → BD |
+| `insider_commands` | **T3** | `InsiderTradeCommand` | `ingestion_l2` | L2 |
+| `jobs_stream` | QueueOrchestrator | `ProcessingJob` | `workers` | Workers (Persona C) |
+| `results_stream` | Workers | `JobResult` | `workers` | Orchestrator |
+
+#### QueueOrchestrator (Persona B)
+
+El orchestrator es el puente entre Ingestion (A) y Workers (C):
+
+```
+raw_data ─────────┐
+                   ├──→ QueueOrchestrator ──→ JobCreator ──→ jobs_stream ──→ Workers
+closed_markets ───┘                                                          │
+                                                                             ▼
+insider_trades ──────────────────────────────────────────────→ T1 ──→ BD    BD
+```
+
+**Comportamiento:**
+- Lee de `raw_data` + `closed_markets` **en paralelo** (`asyncio.gather`)
+- Ambos streams usan el mismo formato (`MarketDataBatch`), mismo consumer group (`scheduler`)
+- Convierte cada batch a `ProcessingJob` via `JobCreator`, publica a `jobs_stream`
+- ACK al stream correcto (fuente) tras procesar cada batch
+- `insider_trades` **no** pasa por el orchestrator — T1 lo consume directamente
+
+**`setup()` crea todos los consumer groups:**
+1. `raw_data` → group `scheduler` (orchestrator lee)
+2. `closed_markets` → group `scheduler` (orchestrator lee)
+3. `insider_trades` → group `tasks` (T1 lee — grupo creado para que esté listo)
+4. `jobs_stream` → group `workers` (workers leen)
+
+#### Configuración (`queue_system/config.py`)
+
+| Setting | Default | Descripción |
+|---------|---------|-------------|
+| `raw_data_stream_name` | `"raw_data"` | Stream de backfill batches |
+| `closed_markets_stream_name` | `"closed_markets"` | Stream de L1 closure batches |
+| `insider_trades_stream_name` | `"insider_trades"` | Stream de L2 insider trades |
+| `insider_commands_stream_name` | `"insider_commands"` | Stream de T3 → L2 comandos |
+| `jobs_stream_name` | `"jobs_stream"` | Stream de jobs B → C |
+| `results_stream_name` | `"results_stream"` | Stream de resultados C → B |
+| `orchestrator_consumer_group` | `"scheduler"` | Consumer group del orchestrator |
+| `insider_trades_consumer_group` | `"tasks"` | Consumer group para T1 |
+| `consumer_group_name` | `"workers"` | Consumer group de workers |
+| `orchestrator_batch_size` | `10` | Batches por iteración de lectura |
+
+#### Uso del Orchestrator
+
+```python
+from redis.asyncio import Redis
+from queue_system.streams.raw_data_stream import RawDataStream
+from queue_system.streams.jobs_stream import JobsStream
+from queue_system.scheduler.job_creator import JobCreator
+from queue_system.config import QueueConfig
+
+config = QueueConfig()
+redis = Redis.from_url(config.redis_url)
+
+raw_stream = RawDataStream(redis, config.raw_data_stream_name)
+closed_stream = RawDataStream(redis, config.closed_markets_stream_name)
+jobs_stream = JobsStream(redis, config.jobs_stream_name)
+creator = JobCreator()
+
+async with QueueOrchestrator(
+    raw_data_stream=raw_stream,
+    jobs_stream=jobs_stream,
+    job_creator=creator,
+    closed_markets_stream=closed_stream,  # opcional, retrocompatible
+    config=config,
+) as orch:
+    await orch.run()
+```
+
+#### Inspección Redis (CLI)
+
+```bash
+# Ver todos los streams
+docker exec cfg-data-redis-1 redis-cli KEYS "*"
+
+# Longitud de cada stream
+docker exec cfg-data-redis-1 redis-cli XLEN raw_data
+docker exec cfg-data-redis-1 redis-cli XLEN closed_markets
+docker exec cfg-data-redis-1 redis-cli XLEN insider_trades
+docker exec cfg-data-redis-1 redis-cli XLEN insider_commands
+docker exec cfg-data-redis-1 redis-cli XLEN jobs_stream
+
+# Consumer groups de un stream
+docker exec cfg-data-redis-1 redis-cli XINFO GROUPS closed_markets
+
+# Mensajes pendientes (lag)
+docker exec cfg-data-redis-1 redis-cli XPENDING raw_data scheduler
+
+# Últimos mensajes
+docker exec cfg-data-redis-1 redis-cli XRANGE closed_markets - + COUNT 3
+```
+
+#### Documentos de Interfaz
+
+- **T3 → L2**: Ver `docs/T3_L2_INTERFACE.md` para el protocolo de comandos insider
+- **Contratos**: Ver `contracts/raw_market_data.py` para `MarketDataBatch`, `InsiderTradeCommand`, `InsiderTradeData`
+
+### Tasks (T)
+
+| Task | Flujo | Descripción |
+|------|-------|-------------|
+| **T1** | (B) Redis → (C) BD | Mueve todo lo que llega al Redis a la BD (markets cerrados + trades insiders) |
+| **T2** | Dentro de (C) BD | Al cierre de market: SQL calcula Δt, Age, Winning_volume, α_slippage, H → tabla `Closed_Market_Variables` |
+| **T3** | (C) BD → (A) L2 | Cuando wallet se marca Insider=true, envía comando a L2 para monitorear sus trades |
+| **T4** | Dentro de (C) BD | Cuando (D) termina de procesar un market, elimina trades de ese market de la tabla Trades |
 
 ---
 
@@ -294,18 +458,28 @@ polymarket-insider-detection/
 │
 ├── ingestion/                    # 👤 PERSONA A
 │   ├── __init__.py
+│   ├── main.py                       # Entry point: arranca L1 + L2
+│   ├── config.py                     # API keys, rate limits, CATEGORIAS_DE_INTERES
+│   ├── http_client.py                # Cliente HTTP async con rate limiting
+│   ├── publisher.py                  # Enviar a Redis (3 streams)
+│   ├── backfill_runner.py            # Backfill histórico (CLI)
 │   ├── collectors/
 │   │   ├── __init__.py
-│   │   ├── markets_collector.py      # Gamma API - mercados
+│   │   ├── markets_collector.py      # Gamma API + Events API
 │   │   ├── trades_collector.py       # Data API - trades
 │   │   ├── wallet_age_collector.py   # Data API + Etherscan V2
-│   │   └── realtime_listener.py      # WebSocket
-│   ├── normalizers/
+│   │   └── realtime/                 # On-chain monitoring (Polygon)
+│   │       ├── __init__.py
+│   │       ├── websocket_listener.py # WebSocket RPC Polygon
+│   │       ├── polling_listener.py   # Fallback polling
+│   │       └── event_decoder.py      # Decode OrderFilled events
+│   ├── listeners/
 │   │   ├── __init__.py
-│   │   └── data_normalizer.py        # Raw → Contratos
-│   ├── publisher.py                  # Enviar a Redis
-│   ├── backfill_runner.py            # Backfill histórico
-│   └── config.py                     # API keys, rate limits
+│   │   ├── market_close_listener.py  # L1: descubrimiento + cierre
+│   │   └── insider_trades_listener.py # L2: comandos T3 + polling
+│   └── normalizers/
+│       ├── __init__.py
+│       └── data_normalizer.py        # Raw → Contratos Pydantic
 │
 ├── queue/                        # 👤 PERSONA B
 │   ├── __init__.py
@@ -389,12 +563,12 @@ polymarket-insider-detection/
 
 ## Contratos (Interfaces entre capas)
 
-### A → B: `MarketDataBatch`
+### A → B: `MarketDataBatch` + Insider contracts
 
 ```python
 # contracts/raw_market_data.py
-from pydantic import BaseModel
-from datetime import datetime
+from pydantic import BaseModel, Field
+from datetime import datetime, UTC
 from typing import Literal
 
 class RawTrade(BaseModel):
@@ -407,6 +581,7 @@ class RawTrade(BaseModel):
     price: float                          # 0.0 - 1.0
     size_usdc: float
     size_tokens: float
+    last_trade: bool = False              # True = último trade antes del cierre
 
 class RawMarketMetadata(BaseModel):
     market_id: str
@@ -415,6 +590,7 @@ class RawMarketMetadata(BaseModel):
     closed: bool
     outcome_prices: list[float] | None    # [1.0, 0.0] si resuelto
     volume_usdc: float
+    winning_outcome: str | None = None    # "Yes"/"No", derivado de outcome_prices
     category: str | None                  # "Sports", "US-current-affairs", "Crypto", etc.
     tags: list[str] | None                # ["NBA", "Basketball"] - extraídos de events
 
@@ -428,6 +604,22 @@ class MarketDataBatch(BaseModel):
     trades: list[RawTrade]
     wallet_ages: dict[str, RawWalletAge]
     ingested_at: datetime
+
+# --- Insider Trades (L2 <-> T3) ---
+
+class InsiderTradeCommand(BaseModel):
+    """Comando T3 → L2 via Redis stream 'insider_commands'"""
+    wallet: str
+    categories_insider: list[str]
+    market_ids_insider: list[str] | None = None
+    command_type: Literal["ADD_WALLET", "UPDATE_CATEGORIES", "REMOVE_WALLET"] = "ADD_WALLET"
+
+class InsiderTradeData(BaseModel):
+    """Dato L2 → Redis stream 'insider_trades'"""
+    wallet: str
+    trades: list[RawTrade]
+    categories_insider: list[str]
+    published_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 ```
 
 ### B → C: `ProcessingJob`
@@ -520,21 +712,12 @@ class Alert(BaseModel):
 ```python
 # queue/interfaces/producer.py
 from abc import ABC, abstractmethod
-from contracts.raw_market_data import MarketDataBatch, RawTrade, RawMarketMetadata
+from contracts.raw_market_data import MarketDataBatch
 
 class QueueProducer(ABC):
     @abstractmethod
     async def publish_market_batch(self, batch: MarketDataBatch) -> str:
-        """Publica batch completo de mercado histórico. Retorna batch_id."""
-        pass
-
-    @abstractmethod
-    async def publish_realtime_trade(
-        self,
-        trade: RawTrade,
-        market: RawMarketMetadata
-    ) -> str:
-        """Publica trade en tiempo real (alta prioridad). Retorna job_id."""
+        """Publica batch completo de mercado (backfill). Retorna batch_id."""
         pass
 
     @abstractmethod
@@ -542,6 +725,10 @@ class QueueProducer(ABC):
         """Verifica conexión con Redis."""
         pass
 ```
+
+**Nota:** Además del `publish_market_batch` (backfill → `raw_data` stream), el `RedisPublisher` de ingestion implementa directamente:
+- `publish_closed_market_batch()` → `closed_markets` stream (L1)
+- `publish_insider_trades()` → `insider_trades` stream (L2)
 
 ### Consumer (C usa esto para consumir)
 
@@ -574,72 +761,39 @@ class QueueConsumer(ABC):
 
 ---
 
-## Ejemplos de Mensajes del Publisher
+## Mensajes del Publisher a Redis
 
-### `publish_market_batch()` → `stream:raw_market_data`
-
-Mensaje enviado a Redis:
+### `publish_closed_market_batch()` → `stream:closed_markets` (L1)
 
 ```json
 {
-  "batch_id": "batch_0x1234abcd5678_a1b2c3d4",
+  "payload": "{...MarketDataBatch JSON completo...}",
   "market_id": "0x1234abcd5678efgh9012ijkl3456mnop",
-  "type": "market_batch",
-  "priority": "normal",
   "trades_count": "47",
   "wallets_count": "23",
-  "published_at": "2026-01-30T15:30:00.123456",
-  "data": "{...MarketDataBatch serializado...}"
+  "category": "Sports",
+  "winning_outcome": "Yes",
+  "ingested_at": "2026-02-09T15:30:00.123456"
 }
 ```
 
-El campo `data` contiene el `MarketDataBatch` completo:
+### `publish_insider_trades()` → `stream:insider_trades` (L2)
 
 ```json
 {
-  "metadata": {
-    "market_id": "0x1234abcd5678efgh9012ijkl3456mnop",
-    "question": "¿Dimitirá el CEO antes del 15 de febrero?",
-    "end_date": "2026-02-15T00:00:00Z",
-    "closed": true,
-    "outcome_prices": [1.0, 0.0],
-    "volume_usdc": 125000.50
-  },
-  "trades": [
-    {
-      "tx_hash": "0xabc123def456...",
-      "wallet": "0x9876fedcba...",
-      "market_id": "0x1234abcd5678efgh9012ijkl3456mnop",
-      "timestamp": "2026-02-14T22:30:00Z",
-      "side": "BUY",
-      "outcome": "Yes",
-      "price": 0.65,
-      "size_usdc": 10000.0,
-      "size_tokens": 15384.61
-    }
-  ],
-  "wallet_ages": {
-    "0x9876fedcba...": {
-      "wallet": "0x9876fedcba...",
-      "first_tx_polymarket": "2026-02-14T20:00:00Z",
-      "first_tx_polygon": "2026-02-14T19:45:00Z"
-    }
-  },
-  "ingested_at": "2026-01-30T15:30:00.100000Z"
+  "payload": "{...InsiderTradeData JSON...}",
+  "wallet": "0xabc123...",
+  "trades_count": "3",
+  "categories": "[\"Sports\",\"Crypto\"]",
+  "published_at": "2026-02-09T15:30:05.789012"
 }
 ```
 
-### `publish_realtime_trade()` → `stream:realtime_trades`
+### `publish_market_batch()` → `stream:raw_data` (Backfill)
 
 ```json
 {
-  "job_id": "rt_0xabc123def456_f7e8d9c0",
-  "type": "realtime_trade",
-  "priority": "high",
-  "market_id": "0x1234abcd5678efgh9012ijkl3456mnop",
-  "published_at": "2026-01-30T15:30:05.789012",
-  "trade": "{...RawTrade serializado...}",
-  "market": "{...RawMarketMetadata serializado...}"
+  "payload": "{...MarketDataBatch JSON completo...}"
 }
 ```
 
@@ -647,20 +801,26 @@ El campo `data` contiene el `MarketDataBatch` completo:
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                    BACKFILL (batch)                         │
-│  stream:raw_market_data                                     │
+│              L1: MARKET CLOSE (batch completo)              │
+│  stream:closed_markets                                      │
 │  ┌───────────────────────────────────────────────────────┐  │
-│  │ batch_id + metadata + N trades + M wallet_ages        │  │
-│  │ priority: normal                                      │  │
+│  │ MarketDataBatch + winning_outcome + wallet_ages       │  │
 │  └───────────────────────────────────────────────────────┘  │
 └─────────────────────────────────────────────────────────────┘
 
 ┌─────────────────────────────────────────────────────────────┐
-│                   REALTIME (individual)                     │
-│  stream:realtime_trades                                     │
+│              L2: INSIDER TRADES (por wallet)                │
+│  stream:insider_trades                                      │
 │  ┌───────────────────────────────────────────────────────┐  │
-│  │ job_id + 1 trade + market metadata                    │  │
-│  │ priority: high                                        │  │
+│  │ InsiderTradeData (wallet + trades + categories)       │  │
+│  └───────────────────────────────────────────────────────┘  │
+└─────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────┐
+│              BACKFILL (batch histórico)                     │
+│  stream:raw_data                                            │
+│  ┌───────────────────────────────────────────────────────┐  │
+│  │ MarketDataBatch (via RawDataStream)                   │  │
 │  └───────────────────────────────────────────────────────┘  │
 └─────────────────────────────────────────────────────────────┘
 ```
@@ -673,7 +833,10 @@ El publisher se ejecuta como parte del servicio `ingestion` en docker-compose:
 # Levantar solo Redis (requerido)
 docker-compose up -d redis
 
-# Ejecutar ingestion (incluye publisher) localmente
+# Ejecutar listeners L1+L2 (automático, entry point principal)
+poetry run python -m ingestion.main
+
+# Ejecutar backfill histórico (herramienta CLI separada)
 poetry run python -m ingestion.backfill_runner --days=30 --min-volume=50000
 
 # O levantar todo con Docker
@@ -681,8 +844,8 @@ docker-compose up -d redis ingestion
 ```
 
 El publisher NO es un servicio independiente. Se usa internamente desde:
-- `backfill_runner.py` para publicar batches históricos
-- `realtime_listener.py` (futuro) para trades en tiempo real
+- `ingestion/main.py` → L1 (`publish_closed_market_batch`) y L2 (`publish_insider_trades`)
+- `backfill_runner.py` → `publish_market_batch` para batches históricos
 
 ### Arquitectura de Clases (Ingestion)
 
@@ -748,6 +911,189 @@ El publisher NO es un servicio independiente. Se usa internamente desde:
 3. Extrae wallets de los trades y consulta edades con `WalletAgeCollector`
 4. `DataNormalizer` convierte los dicts raw → `MarketDataBatch`
 5. `RedisPublisher` (ingestion/publisher.py) envía el batch al stream `raw_data`
+
+---
+
+## Listeners (L1 + L2) — Ingestion en Tiempo Real
+
+Al levantar la capa de ingestion (`python -m ingestion.main`), se arrancan **dos listeners concurrentes** que funcionan de forma autónoma:
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                        ingestion/main.py                               │
+│                   asyncio.gather(l1.run(), l2.run())                   │
+└────────────────────────────┬────────────────────────────────────────────┘
+                             │
+              ┌──────────────┴──────────────┐
+              ▼                              ▼
+┌──────────────────────────┐   ┌──────────────────────────────┐
+│  L1: MarketCloseListener │   │  L2: InsiderTradesListener   │
+│                          │   │                              │
+│  Descubrimiento híbrido  │   │  Comandos desde T3 (Redis)   │
+│  + detección de cierre   │   │  + polling de trades         │
+└────────────┬─────────────┘   └──────────────┬───────────────┘
+             │                                 │
+             ▼                                 ▼
+      closed_markets                    insider_trades
+      (Redis Stream)                    (Redis Stream)
+```
+
+### L1: MarketCloseListener
+
+**Archivo:** `ingestion/listeners/market_close_listener.py`
+
+**Propósito:** Monitorea mercados activos que coincidan con `CATEGORIAS_DE_INTERES`. Cuando un mercado **cierra**, recolecta TODOS los trades + wallet ages, normaliza, y publica un batch completo.
+
+**Tres loops concurrentes:**
+
+| Loop | Intervalo | Qué hace |
+|------|-----------|----------|
+| `_ws_discovery_loop()` | Continuo | Escucha eventos OrderFilled on-chain via WebSocket de Polygon. Cada trade descubierto → enriquece market metadata via Events API → si tags/category coinciden con `CATEGORIAS_DE_INTERES` → añade a `_tracked_markets` |
+| `_gamma_discovery_loop()` | Cada 15 min | `GET /markets?closed=false&volume_num_min=X` + Events API para tags/category. Catch-all para mercados sin trades recientes que el WebSocket no vería |
+| `_close_detection_loop()` | Cada 60s | Re-consulta cada tracked market via `fetch_market_by_id()`. Si `closed=true` → ejecuta `_handle_market_close()` |
+
+**Flujo de cierre (`_handle_market_close`):**
+1. `TradesCollector.fetch_trades_for_market()` → obtiene TODOS los trades
+2. `TradesCollector.extract_wallets_from_trades()` → extrae wallets únicas
+3. `WalletAgeCollector.fetch_wallet_ages_batch()` → obtiene edades
+4. `DataNormalizer.normalize_batch()` → convierte a `MarketDataBatch`
+5. `compute_winning_outcome()` → determina ganador ("Yes"/"No")
+6. `mark_last_trade()` → marca el trade con timestamp más reciente
+7. `RedisPublisher.publish_closed_market_batch()` → XADD a `closed_markets`
+
+**Filtrado por categorías:**
+- Compara `category` del market + `tags[]` de events contra `CATEGORIAS_DE_INTERES`
+- Case-insensitive
+- Tags pueden venir como `{label, slug}` dicts o como strings
+
+**Descubrimiento híbrido (por qué):**
+- **WebSocket** detecta mercados instantáneamente cuando tienen actividad on-chain
+- **Gamma API** (cada 15 min) captura mercados sin trades recientes que el WebSocket no ve
+- Ambos se complementan para no perder ningún mercado relevante
+
+### L2: InsiderTradesListener
+
+**Archivo:** `ingestion/listeners/insider_trades_listener.py`
+
+**Propósito:** Monitorea wallets flaggeadas como insiders por T3. Cuando se detectan trades nuevos de esas wallets en categorías relevantes, los publica para análisis.
+
+**Dos loops concurrentes:**
+
+| Loop | Mecanismo | Qué hace |
+|------|-----------|----------|
+| `_command_listener_loop()` | XREADGROUP blocking (5s timeout) | Espera comandos de T3 en `insider_commands` stream. Soporta: `ADD_WALLET`, `UPDATE_CATEGORIES`, `REMOVE_WALLET` |
+| `_trade_polling_loop()` | Cada 30s | Para cada wallet monitoreada: fetch trades recientes → filtra por timestamp > last_seen → filtra por categorías del market vs `categories_insider` de la wallet → publica matches |
+
+**Flujo de comandos:**
+```
+T3 (Celery Task) ─── XADD insider_commands ───► L2 _command_listener_loop()
+                                                       │
+                                                       ▼
+                                                _monitored_wallets dict
+                                                  wallet → MonitoredWallet{
+                                                    categories_insider,
+                                                    last_seen_ts,
+                                                    trades_published
+                                                  }
+```
+
+**Formato de comando (`InsiderTradeCommand`):**
+```python
+{
+    "wallet": "0xabc...",
+    "categories_insider": ["Sports", "Crypto"],
+    "market_ids_insider": ["0xmarket1", ...],  # opcional
+    "command_type": "ADD_WALLET"  # ADD_WALLET | UPDATE_CATEGORIES | REMOVE_WALLET
+}
+```
+
+**Flujo de polling de trades:**
+1. Para cada wallet en `_monitored_wallets`:
+2. `TradesCollector.fetch_trades_for_wallet(wallet, limit=100)` → trades recientes
+3. Filtra trades con `timestamp > last_seen_ts` (evita duplicados)
+4. Para cada trade, consulta metadata del market (con cache) y enriquece via Events API
+5. Si el market tiene tags/category que intersectan con `categories_insider` de la wallet → normaliza el trade
+6. `RedisPublisher.publish_insider_trades(wallet, trades, categories)` → XADD a `insider_trades`
+7. Actualiza `last_seen_ts` al timestamp más reciente
+
+### Redis Streams (A → B)
+
+| Stream | Productor | Contenido | Consumer Group | Consumidor |
+|--------|-----------|-----------|----------------|------------|
+| `raw_data` | Backfill | `MarketDataBatch` | `scheduler` | QueueOrchestrator → `jobs_stream` |
+| `closed_markets` | L1 | `MarketDataBatch` (market + trades + wallet_ages + winning_outcome) | `scheduler` | QueueOrchestrator → `jobs_stream` |
+| `insider_trades` | L2 | `InsiderTradeData` (wallet + trades filtrados + categories) | `tasks` | T1 → BD |
+| `insider_commands` | T3 | `InsiderTradeCommand` (wallet + categories + command_type) | `ingestion_l2` | L2 |
+
+> `raw_data` y `closed_markets` son leídos por el QueueOrchestrator en paralelo y convertidos a `ProcessingJob`.
+> `insider_trades` es leído directamente por T1 (no pasa por el orchestrator).
+
+### Configuración (`ingestion/config.py`)
+
+```bash
+# .env
+CATEGORIAS_DE_INTERES="Sports,Crypto,US-current-affairs,Pop Culture"
+```
+
+| Setting | Default | Descripción |
+|---------|---------|-------------|
+| `categorias_de_interes` | `["Sports", "Crypto", "US-current-affairs", "Pop Culture"]` | Categorías/tags a monitorear (configurable via .env) |
+| `l1_market_poll_interval_seconds` | `60` | Frecuencia de chequeo de cierre de mercados |
+| `l1_gamma_discovery_interval_seconds` | `900` | Frecuencia de descubrimiento via Gamma API (15 min) |
+| `l1_min_volume_usdc` | `10000.0` | Volumen mínimo para trackear un mercado |
+| `l2_poll_interval_seconds` | `30` | Frecuencia de polling de trades de wallets insider |
+| `l2_commands_stream` | `"insider_commands"` | Stream Redis para comandos T3 → L2 |
+| `l2_commands_consumer_group` | `"ingestion_l2"` | Consumer group para XREADGROUP |
+| `closed_markets_stream` | `"closed_markets"` | Stream Redis para batches de mercados cerrados |
+| `insider_trades_stream` | `"insider_trades"` | Stream Redis para trades de insiders |
+
+### Cómo Levantar
+
+```bash
+# Requisito: Redis
+docker-compose up -d redis
+
+# Localmente (L1 + L2 arrancan automáticamente)
+poetry run python -m ingestion.main
+
+# Con Docker
+docker-compose up -d ingestion
+
+# Backfill histórico (herramienta separada, perfil tools)
+docker-compose --profile tools run backfill
+```
+
+### Test Scripts de Listeners
+
+| Script | Descripción | Dependencias |
+|--------|-------------|--------------|
+| `test_market_close_listener.py` | Category filtering, winning_outcome, last_trade, discovery live | Gamma API (test 7) |
+| `test_insider_trades_listener.py` | Command processing, modelos, Redis injection | Redis (test 6) |
+
+```bash
+poetry run python -m scripts.test_market_close_listener
+poetry run python -m scripts.test_insider_trades_listener
+```
+
+### Verificar Streams de Listeners
+
+```bash
+# Ver mensajes de mercados cerrados
+docker exec -it cfg-data-redis-1 redis-cli XLEN closed_markets
+docker exec -it cfg-data-redis-1 redis-cli XRANGE closed_markets - + COUNT 3
+
+# Ver mensajes de insider trades
+docker exec -it cfg-data-redis-1 redis-cli XLEN insider_trades
+
+# Inyectar comando de insider para testing
+docker exec -it cfg-data-redis-1 redis-cli XADD insider_commands '*' \
+  wallet '0xTestWallet123' \
+  categories_insider '["Sports","Crypto"]' \
+  command_type 'ADD_WALLET'
+
+# Ver comandos pendientes
+docker exec -it cfg-data-redis-1 redis-cli XRANGE insider_commands - + COUNT 5
+```
 
 ---
 
@@ -872,6 +1218,10 @@ CREATE INDEX idx_alerts_percentile ON alerts(percentile DESC);
 # Get your key at: https://etherscan.io/myapikey
 ETHERSCAN_API_KEY=your_key_here
 
+# Filtro de categorías (L1 y L2)
+# Comma-separated list of categories/tags to monitor
+CATEGORIAS_DE_INTERES="Sports,Crypto,US-current-affairs,Pop Culture"
+
 # Redis
 REDIS_URL=redis://localhost:6379/0
 
@@ -926,10 +1276,25 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    command: python -m ingestion.backfill_runner
+    command: python -m ingestion.main      # Arranca L1 + L2
     env_file: .env
+    environment:
+      - REDIS_URL=redis://redis:6379/0    # Override para Docker networking
     depends_on:
       - redis
+
+  backfill:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: python -m ingestion.backfill_runner
+    env_file: .env
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+    depends_on:
+      - redis
+    profiles:
+      - tools                              # Solo se ejecuta con --profile tools
 
   worker:
     build:
@@ -948,17 +1313,14 @@ volumes:
   postgres_data:
 ```
 
+**Nota:** Dentro de Docker, los servicios se comunican por nombre de servicio (`redis://redis:6379/0`), no por `localhost`. El `environment` override en `ingestion` y `backfill` sobreescribe el `REDIS_URL` del `.env` sin afectar el desarrollo local.
+
 ---
 
 ## Dependencias
 
 ```toml
-# pyproject.toml
-[tool.poetry]
-name = "polymarket-insider-detection"
-version = "0.1.0"
-python = "^3.11"
-
+# pyproject.toml (resumen)
 [tool.poetry.dependencies]
 python = "^3.11"
 
@@ -966,6 +1328,10 @@ python = "^3.11"
 aiohttp = "^3.9"
 httpx = "^0.27"
 websockets = "^12.0"
+
+# Blockchain (for on-chain event decoding)
+web3 = "^6.0"
+eth-abi = "^5.0"
 
 # Polymarket client
 py-clob-client = "^0.1"
@@ -988,11 +1354,15 @@ numpy = "^1.26"
 # Utils
 python-dotenv = "^1.0"
 structlog = "^24.1"
+setuptools = "^80.10.2"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.0"
 pytest-asyncio = "^0.23"
 pytest-cov = "^4.1"
+pytest-mock = "^3.12"
+fakeredis = "^2.21"
+freezegun = "^1.4"
 ruff = "^0.2"
 mypy = "^1.8"
 ```
@@ -1007,14 +1377,20 @@ poetry install
 docker-compose up -d redis postgres
 alembic upgrade head
 
-# Ejecutar backfill histórico
-python -m scripts.run_backfill --days=180 --min-volume=50000
+# Ejecutar listeners L1 + L2 (entry point principal)
+poetry run python -m ingestion.main
+
+# Ejecutar backfill histórico (herramienta CLI separada)
+poetry run python -m ingestion.backfill_runner --days=30 --min-volume=50000
+
+# Levantar con Docker (listeners L1 + L2)
+docker-compose up -d redis ingestion
+
+# Ejecutar backfill via Docker (perfil tools)
+docker-compose --profile tools run backfill
 
 # Ejecutar workers
 python -m workers.worker --id=worker-1
-
-# Analizar un mercado específico
-python -m scripts.analyze_market --market-id=0xabc123...
 
 # Tests unitarios (pytest)
 pytest tests/unit -v
@@ -1081,6 +1457,8 @@ poetry run python -m scripts.run_all_tests --filter normalizer --verbose
 | `test_publisher.py` | Valida publicación a Redis | Redis |
 | `test_backfill.py` | Valida backfill runner | APIs + Redis |
 | `test_ingestion_to_queue.py` | Test de integración A→B | Redis |
+| `test_market_close_listener.py` | L1: filtrado categorías, winning outcome, discovery | Gamma API |
+| `test_insider_trades_listener.py` | L2: comandos, modelos, inyección Redis | Redis |
 
 ---
 
@@ -1133,68 +1511,53 @@ XINFO GROUPS raw_data
 
 ## Checklist de Desarrollo
 
-### Persona A (Ingestion)
+### Persona A (Ingestion) — ✅ Completado
 
-- [ ] Collector de mercados cerrados con paginación
-- [ ] Collector de trades con paginación
-- [ ] Collector de edad de wallets (Polymarket + Polygonscan)
-- [ ] WebSocket listener para tiempo real
-- [ ] Normalización a contratos `RawTrade`, `RawMarketMetadata`
-- [ ] Rate limiting con backoff exponencial
-- [ ] Checkpointing para backfill resumible
-- [ ] Tests unitarios de normalización
-- [ ] Test de integración con mock de APIs
-
-### Persona B (Queue)
-
-- [ ] Setup de Redis Streams
-- [ ] Implementar `QueueProducer`
-- [ ] Implementar `QueueConsumer`
-- [ ] Job creator (MarketDataBatch → ProcessingJob)
-- [ ] Cola de prioridades
-- [ ] Retry con backoff exponencial
-- [ ] Dead letter queue
-- [ ] Métricas de queue depth
-- [ ] Tests unitarios de cada componente
-- [ ] Test de integración producer→consumer
-
-### Persona C (Workers + DB)
-
-- [ ] Schema de PostgreSQL + migraciones
-- [ ] Repositorios (wallets, trades, scores, alerts)
-- [ ] Calculadora componente A (ΔELO × ln(1+V))
-- [ ] Calculadora componente B (1/√(Age × Δt_res))
-- [ ] Calculadora componente C (α × e^(-H))
-- [ ] Orquestador de I_score
-- [ ] Cálculo de percentiles por mercado
-- [ ] Generador de alertas
-- [ ] Worker loop principal
-- [ ] Tests unitarios de cada componente
-- [ ] Test con datos reales de Polymarket
+- [x] Collector de mercados (cerrados + abiertos) con paginación
+- [x] Collector de trades con paginación (por mercado y por wallet)
+- [x] Collector de edad de wallets (Polymarket + Etherscan V2)
+- [x] On-chain monitoring (WebSocket + Polling en Polygon)
+- [x] Normalización a contratos `RawTrade`, `RawMarketMetadata`
+- [x] Rate limiting con backoff exponencial (`http_client.py`)
+- [x] Checkpointing para backfill resumible
+- [x] L1 MarketCloseListener (descubrimiento híbrido + detección de cierre)
+- [x] L2 InsiderTradesListener (comandos T3 + polling trades)
+- [x] Entry point `ingestion/main.py` (L1 + L2 concurrentes)
+- [x] Publisher a 3 Redis streams (closed_markets, insider_trades, raw_data)
+- [x] Contratos: `winning_outcome`, `last_trade`, `InsiderTradeCommand`, `InsiderTradeData`
+- [x] Tests: market_close_listener, insider_trades_listener, categories, normalizer, publisher, backfill
 
 ---
 
 ## Ejemplo: Caso de Uso Completo
 
 ```
-1. Mercado "¿Dimitirá el CEO?" cierra el 15 Feb
+1. Mercado "¿Dimitirá el CEO?" está activo con volumen > $10K
 
-2. INGESTION detecta que el mercado cerró
-   → GET /markets?closed=true
-   → GET /activity?market=0x123...
-   → Publica MarketDataBatch a Redis
+2. L1 DESCUBRIMIENTO: MarketCloseListener descubre el mercado
+   → WebSocket on-chain detecta trade en Polygon → enriquece via Events API
+   → O bien: Gamma API discovery (cada 15 min) lo encuentra abierto
+   → Category = "US-current-affairs" → match con CATEGORIAS_DE_INTERES
+   → Añade a _tracked_markets
 
-3. QUEUE crea ProcessingJob
+3. L1 CIERRE: El mercado cierra el 15 Feb
+   → _close_detection_loop() (cada 60s) detecta closed=true
+   → Fetch ALL trades + wallet ages + normaliza
+   → compute_winning_outcome([1.0, 0.0]) → "Yes"
+   → mark_last_trade() → marca trade más reciente
+   → XADD closed_markets → MarketDataBatch completo
+
+4. T1 (Persona B) consume de closed_markets → crea ProcessingJob
    → Prioridad NORMAL (mercado recién cerrado)
-   → Encola en Redis Stream
+   → Encola en Redis Stream de jobs
 
-4. WORKER consume el job
+5. WORKER (Persona C) consume el job
    → Para cada trade, calcula I_score
    → Trade sospechoso: wallet nueva, $10K a 2h del cierre, 0 diversificación
    → I_score = 257, percentil 99.2%
    → Genera Alert tipo P99
 
-5. Resultado en DB:
+6. Resultado en DB:
    - scores: {wallet: 0xABC, i_score: 257, percentile: 99.2, ...}
    - alerts: {wallet: 0xABC, alert_type: P99, status: NEW}
 ```
@@ -1217,93 +1580,72 @@ XINFO GROUPS raw_data
 
 ## 📋 PLAN DE IMPLEMENTACIÓN - PERSONA A (Ingestion)
 
-> **Estado:** ✅ Completado (excepto realtime_listener)
-> **Última actualización:** 2026-02-03
+> **Estado:** ✅ Completado
+> **Última actualización:** 2026-02-09
 
 ### Fase 1: Fundamentos ✅
 
 | Archivo | Estado | Descripción |
 |---------|--------|-------------|
-| `ingestion/config.py` | ✅ Completado | URLs de APIs, rate limits, settings desde .env |
+| `ingestion/config.py` | ✅ Completado | URLs, rate limits, CATEGORIAS_DE_INTERES, L1/L2 config |
 | `ingestion/http_client.py` | ✅ Completado | Cliente HTTP async con rate limiting y retry |
 
 ### Fase 2: Collectors ✅
 
 | Archivo | Estado | Descripción |
 |---------|--------|-------------|
-| `ingestion/collectors/markets_collector.py` | ✅ Completado | Gamma API - mercados cerrados con paginación |
-| `ingestion/collectors/trades_collector.py` | ✅ Completado | Data API - trades por mercado (param: `market`) |
+| `ingestion/collectors/markets_collector.py` | ✅ Completado | Gamma API + Events API (fetch_closed, fetch_open, fetch_by_id, fetch_by_token_id, fetch_event_by_id) |
+| `ingestion/collectors/trades_collector.py` | ✅ Completado | Data API - trades por mercado y por wallet |
 | `ingestion/collectors/wallet_age_collector.py` | ✅ Completado | Data API + Etherscan V2 - edad de wallets |
-| `ingestion/collectors/realtime_listener.py` | ❌ **BLOQUEADO** | WebSocket para trades en tiempo real (ver nota abajo) |
+| `ingestion/collectors/realtime/` | ✅ Completado | WebSocket + Polling on-chain (Polygon) para descubrimiento L1 |
 
 ### Fase 3: Normalización ✅
 
 | Archivo | Estado | Descripción |
 |---------|--------|-------------|
-| `ingestion/normalizers/data_normalizer.py` | ✅ Completado | Raw JSON → Contratos Pydantic |
+| `ingestion/normalizers/data_normalizer.py` | ✅ Completado | Raw → Contratos + compute_winning_outcome() + mark_last_trade() |
 
 ### Fase 4: Publisher ✅
 
 | Archivo | Estado | Descripción |
 |---------|--------|-------------|
-| `ingestion/publisher.py` | ✅ Completado | Implementación de QueueProducer → Redis Streams |
+| `ingestion/publisher.py` | ✅ Completado | QueueProducer + publish_closed_market_batch() + publish_insider_trades() |
 
 ### Fase 5: Orquestación ✅
 
 | Archivo | Estado | Descripción |
 |---------|--------|-------------|
-| `ingestion/backfill_runner.py` | ✅ Completado | Orquestador con CLI, checkpointing, dry-run |
+| `ingestion/backfill_runner.py` | ✅ Completado | Backfill histórico con CLI, checkpointing, dry-run |
+| `ingestion/listeners/market_close_listener.py` | ✅ Completado | L1: Descubrimiento híbrido + detección de cierre |
+| `ingestion/listeners/insider_trades_listener.py` | ✅ Completado | L2: Comandos T3 + polling trades insiders |
+| `ingestion/main.py` | ✅ Completado | Entry point: arranca L1 + L2 concurrentemente |
+
+### Contratos ✅
+
+| Modelo | Archivo | Descripción |
+|--------|---------|-------------|
+| `RawTrade.last_trade` | `contracts/raw_market_data.py` | Marca el último trade antes del cierre |
+| `RawMarketMetadata.winning_outcome` | `contracts/raw_market_data.py` | "Yes"/"No" derivado de outcome_prices |
+| `InsiderTradeCommand` | `contracts/raw_market_data.py` | Comando T3 → L2 (ADD/UPDATE/REMOVE wallet) |
+| `InsiderTradeData` | `contracts/raw_market_data.py` | Dato L2 → Redis (wallet + trades + categories) |
 
 ### Scripts de Test
 
 | Script | Estado | Comando |
 |--------|--------|---------|
-| `scripts/test_markets.py` | ✅ Verificado | `poetry run python -m scripts.test_markets` |
-| `scripts/test_trades.py` | ✅ Verificado | `poetry run python -m scripts.test_trades` |
-| `scripts/test_normalizer.py` | ✅ Verificado | `poetry run python -m scripts.test_normalizer` |
-| `scripts/test_wallet_age.py` | ✅ Verificado | `poetry run python -m scripts.test_wallet_age` |
-| `scripts/test_publisher.py` | ✅ Verificado | `poetry run python -m scripts.test_publisher` |
-| `scripts/test_backfill.py` | ✅ Verificado | `poetry run python -m scripts.test_backfill` |
+| `scripts/test_markets.py` | ✅ | `poetry run python -m scripts.test_markets` |
+| `scripts/test_trades.py` | ✅ | `poetry run python -m scripts.test_trades` |
+| `scripts/test_normalizer.py` | ✅ | `poetry run python -m scripts.test_normalizer` |
+| `scripts/test_categories.py` | ✅ | `poetry run python -m scripts.test_categories` |
+| `scripts/test_wallet_age.py` | ✅ | `poetry run python -m scripts.test_wallet_age` |
+| `scripts/test_publisher.py` | ✅ | `poetry run python -m scripts.test_publisher` |
+| `scripts/test_backfill.py` | ✅ | `poetry run python -m scripts.test_backfill` |
+| `scripts/test_market_close_listener.py` | ✅ | `poetry run python -m scripts.test_market_close_listener` |
+| `scripts/test_insider_trades_listener.py` | ✅ | `poetry run python -m scripts.test_insider_trades_listener` |
 
-> ✅ `test_wallet_age.py` funciona con `ETHERSCAN_API_KEY` configurada en `.env`.
-> ✅ `test_publisher.py` funciona con Redis levantado (`docker-compose up -d redis`).
+### Nota: WebSocket de Polymarket vs On-Chain
 
-### ❌ Realtime Listener - Por qué está bloqueado
-
-El `realtime_listener.py` **no se puede construir actualmente** debido a limitaciones de la API de Polymarket:
-
-#### Opciones de WebSocket disponibles
-
-| Datos | `/ws/user` (Privado) | `/ws/market` (Público) |
-|-------|---------------------|------------------------|
-| Tus órdenes | ✅ Sí | ❌ No |
-| Órdenes de otros | ❌ No | ❌ No (Anónimo) |
-| Trades globales | ❌ No | ✅ Sí |
-| Libro de órdenes (L2) | ❌ No | ✅ Sí |
-
-#### El problema
-
-1. **WebSocket Público (`/ws/market`)**: Muestra trades en tiempo real, pero el **CLOB de Polymarket es anónimo**. No revela la wallet de quien hizo la operación.
-
-2. **WebSocket Privado (`/ws/user`)**: Solo muestra **tus propias** operaciones, no las de otros usuarios.
-
-3. **Trades públicos**: Puedes suscribirte al canal `trades` para ver ejecuciones globales, pero sin identificar wallets:
-   ```json
-   {
-     "type": "subscribe",
-     "assets_ids": ["ID_DEL_MERCADO"],
-     "channels": ["trades"]
-   }
-   ```
-
-#### Solución futura: Rastreo On-Chain (Polygon)
-
-Polymarket liquida las operaciones en la red de **Polygon**. La solución será:
-
-- Monitorear transacciones directamente en blockchain via **Polygonscan API** o webhooks (Alchemy/QuickNode)
-- **Limitación:** Solo se verán operaciones cuando ya se han confirmado en la red, no órdenes límite pendientes en el CLOB
-
-> 📅 **TODO:** Implementar rastreo on-chain de Polygon para monitoreo en tiempo real (fase futura).
+El CLOB de Polymarket es **anónimo** — el WebSocket público (`/ws/market`) no revela wallets. Por eso L1 usa **WebSocket on-chain de Polygon** (eventos `OrderFilled` del contrato CTFExchange) para descubrimiento de mercados, no el WebSocket de Polymarket.
 
 ### Leyenda
 

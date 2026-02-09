@@ -147,6 +147,86 @@ class MarketsCollector:
 
         logger.info("finished_fetching_markets", total_fetched=count)
 
+    async def fetch_open_markets(
+        self,
+        min_volume_usdc: float | None = None,
+        limit: int | None = None,
+    ) -> AsyncIterator[dict]:
+        """
+        Fetch open (active) markets with pagination.
+        Used by L1 for Gamma API discovery of markets to track.
+
+        Args:
+            min_volume_usdc: Minimum market volume (default from L1 config)
+            limit: Maximum number of markets to return (None = all)
+
+        Yields:
+            Raw market data dicts from Gamma API
+        """
+        client = get_http_client()
+
+        min_volume = min_volume_usdc or self.settings.l1_min_volume_usdc
+
+        params = {
+            "closed": "false",
+            "volume_num_min": str(int(min_volume)),
+            "order": "volume",
+            "ascending": "false",
+            "limit": "100",
+        }
+
+        count = 0
+        next_cursor: str | None = None
+
+        logger.info(
+            "fetching_open_markets",
+            min_volume_usdc=min_volume,
+        )
+
+        while True:
+            if next_cursor:
+                params["next_cursor"] = next_cursor
+
+            try:
+                response = await client.get(
+                    self.base_url,
+                    params=params,
+                    api_type=APIType.POLYMARKET,
+                )
+            except Exception as e:
+                logger.error("fetch_open_markets_failed", error=str(e))
+                raise
+
+            if isinstance(response, list):
+                markets = response
+                next_cursor = None
+            else:
+                markets = response.get("data", response.get("markets", []))
+                next_cursor = response.get("next_cursor")
+
+            if not markets:
+                break
+
+            for market in markets:
+                yield market
+                count += 1
+
+                if limit and count >= limit:
+                    logger.info("open_markets_reached_limit", limit=limit, total_fetched=count)
+                    return
+
+            logger.debug(
+                "fetched_open_markets_page",
+                page_size=len(markets),
+                total_so_far=count,
+                has_more=bool(next_cursor),
+            )
+
+            if not next_cursor:
+                break
+
+        logger.info("finished_fetching_open_markets", total_fetched=count)
+
     async def fetch_market_by_id(self, condition_id: str) -> dict | None:
         """
         Fetch a single market by its condition ID.
@@ -185,3 +265,132 @@ class MarketsCollector:
                 error=str(e),
             )
             raise
+
+    async def fetch_event_by_id(self, event_id: str) -> dict | None:
+        """
+        Fetch a single event from the Gamma Events API.
+
+        The Events API returns tags for ALL markets (active and closed)
+        and category for closed markets. The /markets endpoint does NOT
+        return category/tags when queried by condition_ids or clob_token_ids.
+
+        Args:
+            event_id: The event ID (from events[0].id in market response)
+
+        Returns:
+            Event data dict or None if not found
+        """
+        client = get_http_client()
+        events_url = f"{self.settings.gamma_api_url}/events/{event_id}"
+
+        try:
+            response = await client.get(
+                events_url,
+                api_type=APIType.POLYMARKET,
+            )
+
+            if isinstance(response, dict) and response.get("id"):
+                return response
+            elif isinstance(response, list) and response:
+                return response[0]
+
+            logger.warning("event_not_found", event_id=event_id)
+            return None
+
+        except Exception as e:
+            logger.warning(
+                "fetch_event_by_id_failed",
+                event_id=event_id,
+                error=str(e),
+            )
+            return None
+
+    async def fetch_market_by_token_id(self, token_id: str) -> dict | None:
+        """
+        Fetch a market by its CLOB token ID (outcome token).
+
+        The token_id is the asset ID from OrderFilled events on-chain.
+
+        Strategy (two calls):
+        1. GET /markets?clob_token_ids=X → market data + events[0].id
+        2. GET /events/{event_id} → tags (always) + category (if closed)
+
+        Then merges event tags/category into the market dict so the
+        normalizer can extract them.
+
+        Args:
+            token_id: The outcome token ID (from on-chain events)
+
+        Returns:
+            Market data dict enriched with category/tags, or None
+        """
+        client = get_http_client()
+
+        # Step 1: Get market data + event_id from token_id
+        params = {"clob_token_ids": token_id}
+
+        try:
+            response = await client.get(
+                self.base_url,
+                params=params,
+                api_type=APIType.POLYMARKET,
+            )
+
+            # Extract market from response
+            market = None
+            if isinstance(response, list) and response:
+                market = response[0]
+            elif isinstance(response, dict):
+                markets = response.get("data", response.get("markets", []))
+                if markets:
+                    market = markets[0]
+
+            if not market:
+                logger.debug(
+                    "market_not_found_for_token",
+                    token_id=token_id[:30] + "...",
+                )
+                return None
+
+            # Step 2: Get event_id and fetch from Events API for tags/category
+            events = market.get("events", [])
+            event_id = None
+            if events and isinstance(events, list) and len(events) > 0:
+                event_id = events[0].get("id")
+
+            if event_id:
+                event_data = await self.fetch_event_by_id(str(event_id))
+
+                if event_data:
+                    # Merge category from Events API into market
+                    event_category = event_data.get("category")
+                    if event_category:
+                        market["category"] = event_category
+
+                    # Merge tags into events[0] so normalizer can extract them
+                    event_tags = event_data.get("tags", [])
+                    if event_tags and market.get("events"):
+                        market["events"][0]["tags"] = event_tags
+
+                    logger.debug(
+                        "market_enriched_from_events_api",
+                        token_id=token_id[:20] + "...",
+                        condition_id=market.get("conditionId", "")[:20] + "...",
+                        category=market.get("category"),
+                        tags_count=len(event_tags),
+                    )
+            else:
+                logger.debug(
+                    "no_event_id_for_market",
+                    token_id=token_id[:20] + "...",
+                )
+
+            return market
+
+        except Exception as e:
+            logger.warning(
+                "fetch_market_by_token_id_failed",
+                token_id=token_id[:20] + "...",
+                error=str(e),
+            )
+            return None

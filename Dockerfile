@@ -17,6 +17,10 @@ RUN pip install poetry
 # Copy dependency files
 COPY pyproject.toml ./
 
+# Copy local packages referenced in pyproject.toml (needed for poetry install)
+COPY queue_system/ ./queue_system/
+COPY contracts/ ./contracts/
+
 # Install Python dependencies
 RUN poetry config virtualenvs.create false \
     && poetry install --no-interaction --no-ansi
