@@ -55,6 +55,22 @@ services:
     environment:
       - LOG_DIR=/app/logs
 
+  beat:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: celery -A workers.celery_app beat --loglevel=info
+    env_file: .env
+    depends_on:
+      - redis
+      - postgres
+    networks:
+      - proyect_net
+    volumes:
+      - ./logs:/app/logs
+    environment:
+      - LOG_DIR=/app/logs
+
 
 
 volumes:

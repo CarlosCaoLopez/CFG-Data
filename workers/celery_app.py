@@ -26,7 +26,16 @@ app.conf.update(
     task_acks_late = True,
     task_reject_on_worker_lost = True,
     broker_connection_retry_on_startup = True,
+
+    # Periodic Tasks (Celery Beat)
+    beat_schedule = {
+        'cleanup-stale-trades-hourly': {
+            'task': 'workers.tasks.cleanup_stale_trades',
+            'schedule': 3600.0,  # 3600 seconds = 1 hour
+        },
+    },
 )
 
+# IMPORTANTE: Este import debe estar DESPUÉS de crear la app
+# para que las señales se conecten correctamente
 import workers.logging_config
-import workers.logging

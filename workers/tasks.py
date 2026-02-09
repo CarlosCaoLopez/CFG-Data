@@ -1,19 +1,22 @@
 import os
 import time
 import math
-import asyncio
 from pathlib import Path
 from dotenv import load_dotenv
 from datetime import datetime
 from sqlalchemy import text
+from celery.utils.log import get_task_logger
 from workers.celery_app import app
 from contracts.processing_job import JobResult
-from database.connection import async_session
+from database.connection import get_sync_session
 
 # from database.manager import DatabaseManager  # Commented out - not used after removing score persistence
 
 # Ruta al script SQL de compute_variables
 _SQL_DIR = Path(__file__).resolve().parent.parent / "scripts" / "sql"
+
+# Logger for tasks
+logger = get_task_logger(__name__)
 
 
 @app.task(bind=True, max_retries=3)
@@ -22,6 +25,7 @@ def calculate_i_score(self, job_dict: dict) -> JobResult:
     Celery main task.
     We have a dictionary because Celery serializes to JSON by default
     """
+    logger.info(f"Iniciando calculate_i_score para job_id={job_dict.get('job_id')}")
     start_time = time.time()
     load_dotenv()
 
@@ -103,23 +107,51 @@ def compute_variables(self, market_id: str) -> dict:
     sql_path = _SQL_DIR / "compute_variables.sql"
     sql_text = sql_path.read_text(encoding="utf-8")
 
-    async def _execute():
-        async with async_session() as session:
-            result = await session.execute(
+    try:
+        with get_sync_session() as session:
+            result = session.execute(
                 text(sql_text),
                 {"market_id": market_id}
             )
             rows_affected = result.rowcount
-            await session.commit()
-            return rows_affected
 
-    rows = asyncio.run(_execute())
+        processing_time_ms = int((time.time() - start_time) * 1000)
 
-    processing_time_ms = int((time.time() - start_time) * 1000)
+        return {
+            "market_id": market_id,
+            "success": True,
+            "rows_inserted": rows_affected,
+            "processing_time_ms": processing_time_ms
+        }
+    except Exception as e:
+        logger.error(f"Error en compute_variables para market_id={market_id}: {str(e)}", exc_info=True)
+        raise
 
-    return {
-        "market_id": market_id,
-        "success": True,
-        "rows_inserted": rows,
-        "processing_time_ms": processing_time_ms
-    }
+
+@app.task(bind=True, max_retries=3)
+def cleanup_stale_trades(self) -> dict:
+    """
+    Limpia trades estancados (updated_at > 1 hora) y sus closed_market_variables asociados.
+    Ejecuta el script SQL cleanup_stale_trades.sql.
+    Esta tarea se ejecuta periódicamente cada hora vía Celery Beat.
+    """
+    logger.info("Iniciando cleanup_stale_trades")
+    start_time = time.time()
+
+    sql_path = _SQL_DIR / "cleanup_stale_trades.sql"
+    sql_text = sql_path.read_text(encoding="utf-8")
+
+    try:
+        with get_sync_session() as session:
+            session.execute(text(sql_text))
+
+        processing_time_ms = int((time.time() - start_time) * 1000)
+
+        return {
+            "success": True,
+            "task": "cleanup_stale_trades",
+            "processing_time_ms": processing_time_ms
+        }
+    except Exception as e:
+        logger.error(f"Error en cleanup_stale_trades: {str(e)}", exc_info=True)
+        raise
