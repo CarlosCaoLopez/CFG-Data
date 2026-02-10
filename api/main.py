@@ -1,28 +1,106 @@
-from fastapi import FastAPI
-from pydantic import BaseModel
-from typing import List, Dict, Any
+import logging
+from fastapi import FastAPI, Depends
+from pydantic import BaseModel, Field
+from typing import Literal
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from database.connection import get_session
+from database.manager import DatabaseManager
 
 app = FastAPI(title="Receptor de Resultados R")
+logger = logging.getLogger(__name__)
 
-# --- Función de Base de Datos (Placeholder) ---
-def mock_db_save(data: Dict[str, Any]):
+
+# --- Request / Response schemas ---
+
+class InsiderWalletResult(BaseModel):
+    """A single wallet detected as insider in a market."""
+    wallet: str = Field(..., description="Wallet address (lowercase, 0x-prefixed)")
+    categories_insider: list[str] = Field(
+        ..., description="Categories where insider was detected"
+    )
+    command_type: Literal["ADD_WALLET", "UPDATE_CATEGORIES", "REMOVE_WALLET"] = Field(
+        default="ADD_WALLET"
+    )
+
+
+class InsiderDetectionBatch(BaseModel):
+    """Batch of insider detection results for a single market."""
+    market_id: str = Field(..., description="Market condition ID that was analyzed")
+    wallets: list[InsiderWalletResult] = Field(
+        ..., min_length=1, description="Wallets detected as insiders"
+    )
+
+
+class InsiderDetectionResponse(BaseModel):
+    status: Literal["accepted", "partial_failure", "error"]
+    market_id: str
+    wallets_updated: int
+    tasks_dispatched: int
+    errors: list[str] | None = None
+
+
+# --- Endpoint ---
+
+@app.post("/insider-detection", response_model=InsiderDetectionResponse)
+async def receive_insider_detection(
+    batch: InsiderDetectionBatch,
+    session: AsyncSession = Depends(get_session),
+):
     """
-    Simula la inserción en PostgreSQL.
+    Receives insider detection results from the calculation engine.
+
+    For each wallet in the batch:
+    1. Updates wallets table: insider=True, categories_insider, marketids_insider
+    2. Dispatches Celery task T3 to publish InsiderTradeCommand to Redis stream
     """
-    print(f"DEBUG: Insertando en DB -> {data}")
-    return True
+    db = DatabaseManager(session)
+    wallets_updated = 0
+    tasks_dispatched = 0
+    errors: list[str] = []
 
-# --- Modelo de datos ---
-class RResult(BaseModel):
-    task_id: str
-    summary_metrics: Dict[str, float]
-    processed_at: str
+    for wallet_result in batch.wallets:
+        # 1. Update DB
+        try:
+            await db.upsert_wallet({
+                "address": wallet_result.wallet,
+                "insider": True,
+                "categories_insider": wallet_result.categories_insider,
+                "marketids_insider": [batch.market_id],
+            })
+            wallets_updated += 1
+        except Exception as e:
+            msg = f"DB update failed for {wallet_result.wallet}: {e}"
+            logger.error(msg, exc_info=True)
+            errors.append(msg)
+            continue
 
-@app.post("/store-results")
-async def store_results(data: RResult):
-    # Convertimos a diccionario para la función de DB
-    save_status = mock_db_save(data.model_dump())
+        # 2. Dispatch T3
+        try:
+            from workers.tasks import publish_insider_command
+            publish_insider_command.delay({
+                "wallet": wallet_result.wallet,
+                "categories_insider": wallet_result.categories_insider,
+                "market_ids_insider": [batch.market_id],
+                "command_type": wallet_result.command_type,
+            })
+            tasks_dispatched += 1
+        except Exception as e:
+            msg = f"T3 dispatch failed for {wallet_result.wallet}: {e}"
+            logger.error(msg, exc_info=True)
+            errors.append(msg)
 
-    if save_status:
-        return {"status": "success", "message": "Resultados guardados"}
-    return {"status": "error", "message": "Error al guardar"}
+    if wallets_updated == 0:
+        status = "error"
+    elif errors:
+        status = "partial_failure"
+    else:
+        status = "accepted"
+
+    return InsiderDetectionResponse(
+        status=status,
+        market_id=batch.market_id,
+        wallets_updated=wallets_updated,
+        tasks_dispatched=tasks_dispatched,
+        errors=errors if errors else None,
+    )

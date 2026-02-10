@@ -25,4 +25,4 @@ RUN poetry config virtualenvs.create false \
 COPY . .
 
 # Default command (override in docker-compose)
-CMD ["python", "-m", "workers.worker"]
+CMD ["celery", "-A", "workers.celery_app", "worker", "--loglevel=info"]

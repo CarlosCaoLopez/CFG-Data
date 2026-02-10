@@ -5,6 +5,13 @@ services:
       - "6379:6379"
     volumes:
       - redis_data:/data
+    networks:
+      - proyect_net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
 
   postgres:
     image: timescale/timescaledb:latest-pg15
@@ -16,6 +23,13 @@ services:
       - "5433:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    networks:
+      - proyect_net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U insider -d insider_detection"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
 
   ingestion:
     build:
@@ -23,16 +37,32 @@ services:
       dockerfile: Dockerfile
     command: python -m ingestion.backfill_runner
     env_file: .env
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      - DATABASE_URL=postgresql://insider:insider_pass@postgres:5432/insider_detection
     depends_on:
-      - redis
-
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    networks:
+      - proyect_net
 
   api:
     build: .
     container_name: python_api
     command: uvicorn api.main:app --host 0.0.0.0 --port 8000
+    env_file: .env
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      - DATABASE_URL=postgresql://insider:insider_pass@postgres:5432/insider_detection
     expose:
-      - "8000" # Solo visible para otros contenedores
+      - "8000"
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
     networks:
       - proyect_net
 
@@ -40,20 +70,25 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    command: python -m workers.worker
+    command: celery -A workers.celery_app worker --loglevel=info
     env_file: .env
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      - DATABASE_URL=postgresql://insider:insider_pass@postgres:5432/insider_detection
+      - LOG_DIR=/app/logs
     depends_on:
-      - redis
-      - postgres
-      - api
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      api:
+        condition: service_started
     networks:
       - proyect_net
     deploy:
       replicas: 4
     volumes:
       - ./logs:/app/logs
-    environment:
-      - LOG_DIR=/app/logs
 
   beat:
     build:
@@ -61,17 +96,19 @@ services:
       dockerfile: Dockerfile
     command: celery -A workers.celery_app beat --loglevel=info
     env_file: .env
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      - DATABASE_URL=postgresql://insider:insider_pass@postgres:5432/insider_detection
+      - LOG_DIR=/app/logs
     depends_on:
-      - redis
-      - postgres
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
     networks:
       - proyect_net
     volumes:
       - ./logs:/app/logs
-    environment:
-      - LOG_DIR=/app/logs
-
-
 
 volumes:
   redis_data:

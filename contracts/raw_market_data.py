@@ -57,3 +57,17 @@ class MarketDataBatch(BaseModel):
         default_factory=datetime.utcnow,
         description="When this batch was ingested"
     )
+
+
+class InsiderTradeCommand(BaseModel):
+    """Command published to Redis stream `insider_commands` for L2 listener."""
+    wallet: str = Field(..., description="Wallet address (lowercase, 0x-prefixed)")
+    categories_insider: list[str] = Field(
+        ..., description="Categories where insider behavior was detected"
+    )
+    market_ids_insider: list[str] | None = Field(
+        None, description="Specific market IDs flagged"
+    )
+    command_type: Literal["ADD_WALLET", "UPDATE_CATEGORIES", "REMOVE_WALLET"] = Field(
+        ..., description="Type of command for L2 listener"
+    )

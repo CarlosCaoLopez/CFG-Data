@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import create_async_engine
 from alembic import context
 
 from database.models import Base
-from database.connection import DATABASE_URL
+from database.connection import DATABASE_URL_ASYNC as DATABASE_URL
 
 config = context.config
 

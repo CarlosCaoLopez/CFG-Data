@@ -117,6 +117,10 @@ def compute_variables(self, market_id: str) -> dict:
 
         processing_time_ms = int((time.time() - start_time) * 1000)
 
+        ######################################################################
+        ## TODO: Mandar la tarea al motor de cálculo. Parámetros: ID_market ##
+        ######################################################################
+
         return {
             "market_id": market_id,
             "success": True,
@@ -155,3 +159,42 @@ def cleanup_stale_trades(self) -> dict:
     except Exception as e:
         logger.error(f"Error en cleanup_stale_trades: {str(e)}", exc_info=True)
         raise
+
+
+@app.task(bind=True, max_retries=3)
+def publish_insider_command(self, command_dict: dict) -> dict:
+    """
+    Task T3: Publishes an InsiderTradeCommand to Redis stream `insider_commands`.
+    Called after the API updates the wallets table.
+    Each invocation publishes one command for one wallet.
+
+    XADD insider_commands * payload '<json>'
+    """
+    import json
+    import redis
+
+    wallet = command_dict.get("wallet")
+    logger.info(
+        f"T3: Publishing insider command for wallet={wallet}, "
+        f"type={command_dict.get('command_type')}"
+    )
+
+    redis_url = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
+    client = redis.from_url(redis_url)
+    try:
+        payload = json.dumps(command_dict)
+        msg_id = client.xadd("insider_commands", {"payload": payload})
+        msg_id_str = msg_id.decode() if isinstance(msg_id, bytes) else str(msg_id)
+
+        logger.info(f"T3: Published msg_id={msg_id_str} for wallet={wallet}")
+        return {
+            "success": True,
+            "msg_id": msg_id_str,
+            "wallet": wallet,
+            "command_type": command_dict.get("command_type"),
+        }
+    except Exception as e:
+        logger.error(f"T3: XADD failed for wallet={wallet}: {e}", exc_info=True)
+        raise self.retry(exc=e, countdown=2 ** self.request.retries)
+    finally:
+        client.close()

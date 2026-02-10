@@ -1,3 +1,4 @@
+from sqlalchemy import text as sa_text
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from database.models.market import Market
@@ -37,19 +38,28 @@ class DatabaseManager:
 
     async def upsert_wallet(self, wallet_data: dict):
         """
-        Inserts or updates a wallet, avoiding duplicates
+        Inserts or updates a wallet, avoiding duplicates.
+        Arrays categories_insider and marketids_insider are accumulated (append + dedup),
+        not replaced, so previous detections are preserved.
         """
         stmt = insert(Wallet).values(**wallet_data)
 
-        # What to do if the primary key exists
         stmt = stmt.on_conflict_do_update(
             index_elements=['address'],
             set_={
                 "total_volume_usdc": stmt.excluded.total_volume_usdc,
                 "markets_traded": stmt.excluded.markets_traded,
                 "insider": stmt.excluded.insider,
-                "categories_insider": stmt.excluded.categories_insider,
-                "marketids_insider": stmt.excluded.marketids_insider
+                "categories_insider": sa_text(
+                    "ARRAY(SELECT DISTINCT unnest("
+                    "COALESCE(wallets.categories_insider, '{}'::text[]) || "
+                    "COALESCE(EXCLUDED.categories_insider, '{}'::text[])))"
+                ),
+                "marketids_insider": sa_text(
+                    "ARRAY(SELECT DISTINCT unnest("
+                    "COALESCE(wallets.marketids_insider, '{}'::text[]) || "
+                    "COALESCE(EXCLUDED.marketids_insider, '{}'::text[])))"
+                ),
             }
         )
 

@@ -1,13 +1,26 @@
 # Database connection pool management
+import os
 from contextlib import contextmanager
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, Session
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 from database.base import Base
 
-# Async mode (para FastAPI, scripts async, etc.)
-DATABASE_URL_ASYNC = "postgresql+asyncpg://insider:insider_pass@localhost:5433/insider_detection"
+# Build connection URLs from DATABASE_URL env var.
+# DATABASE_URL format: postgresql://user:pass@host:port/dbname
+# Docker override sets this to point to the postgres service; local dev defaults to localhost:5433.
+_base_url = os.environ.get(
+    "DATABASE_URL",
+    "postgresql://insider:insider_pass@localhost:5433/insider_detection"
+)
 
+# Derive driver-specific URLs from the base URL
+# postgresql://... → postgresql+asyncpg://...
+DATABASE_URL_ASYNC = _base_url.replace("postgresql://", "postgresql+asyncpg://", 1)
+# postgresql://... → postgresql+psycopg2://...
+DATABASE_URL_SYNC = _base_url.replace("postgresql://", "postgresql+psycopg2://", 1)
+
+# Async mode (para FastAPI, scripts async, etc.)
 engine = create_async_engine(
     DATABASE_URL_ASYNC,
     pool_size=2,        # Only two permanent connections per worker. Be careful with scalability
@@ -23,8 +36,6 @@ async def get_session():
         yield session
 
 # Sync mode (para Celery workers - evita problemas con event loops)
-DATABASE_URL_SYNC = "postgresql+psycopg2://insider:insider_pass@localhost:5433/insider_detection"
-
 sync_engine = create_engine(
     DATABASE_URL_SYNC,
     pool_size=2,
