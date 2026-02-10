@@ -1,0 +1,2 @@
+[2026-02-09 17:01:49,696] INFO - ForkPoolWorker-14 - [yago-Pulse-GL66-12UGK] - TAREA COMPLETADA: workers.tasks.compute_variables | RESULTADO: {'market_id': 'test_market_123', 'success': True, 'rows_inserted': 0, 'processing_time_ms': 26}
+[2026-02-09 17:01:59,059] INFO - ForkPoolWorker-14 - [yago-Pulse-GL66-12UGK] - TAREA COMPLETADA: workers.tasks.compute_variables | RESULTADO: {'market_id': 'debug_market_123', 'success': True, 'rows_inserted': 0, 'processing_time_ms': 3}

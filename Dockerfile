@@ -15,7 +15,7 @@ RUN apt-get update && apt-get install -y \
 RUN pip install poetry
 
 # Copy dependency files
-COPY pyproject.toml ./
+COPY pyproject.toml poetry.lock ./
 
 # Copy local packages referenced in pyproject.toml (needed for poetry install)
 COPY queue_system/ ./queue_system/
@@ -23,10 +23,10 @@ COPY contracts/ ./contracts/
 
 # Install Python dependencies
 RUN poetry config virtualenvs.create false \
-    && poetry install --no-interaction --no-ansi
+    && poetry install --no-interaction --no-ansi --no-root
 
 # Copy application code
 COPY . .
 
 # Default command (override in docker-compose)
-CMD ["python", "-m", "workers.worker"]
+CMD ["celery", "-A", "workers.celery_app", "worker", "--loglevel=info"]

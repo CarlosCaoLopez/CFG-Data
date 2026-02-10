@@ -34,11 +34,12 @@ class WalletScore(BaseModel):
 
     # Components
     component_a: float = Field(..., description="Impacto del Éxito: ΔELO·ln(1+V)")
-    component_b: float = Field(..., description="Factor Fantasma: 1/√(Age·Δt_res)")
-    component_c: float = Field(..., description="Agresividad Focalizada: α·e^(-H)")
+    component_b: float = Field(..., description="Factor Fantasma: 1/√(Δt_res)")
+    component_c: float = Field(..., description="Edad de la cuenta: 1/√(Age)")
+    component_d: float = Field(..., description="Agresividad Focalizada: α·e^(-H)")
 
     # Intermediate variables for transparency
-    delta_elo: float = Field(..., description="ELO change: K×(S-P_mkt)")
+    delta_elo: float = Field(..., description="ELO change: K·ln(1+V)·(S-P_mkt)")
     volume_usdc: float = Field(..., ge=0, description="Trade volume in USDC")
     won: bool = Field(..., description="Whether the trade won")
     price_at_trade: float = Field(..., ge=0.0, le=1.0, description="Market price at trade")
