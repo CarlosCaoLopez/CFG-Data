@@ -41,6 +41,8 @@ services:
       - REDIS_URL=redis://redis:6379/0
     depends_on:
       - redis
+    networks:
+      - proyect_net
 
   backfill:
     build:
@@ -50,6 +52,21 @@ services:
     env_file: .env
     environment:
       - REDIS_URL=redis://redis:6379/0
+      - DATABASE_URL=postgresql://insider:insider_pass@postgres:5432/insider_detection
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    networks:
+      - proyect_net
+
+  orchestrator:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: python -m queue_system
+    env_file: .env
     environment:
       - REDIS_URL=redis://redis:6379/0
       - DATABASE_URL=postgresql://insider:insider_pass@postgres:5432/insider_detection
@@ -69,16 +86,32 @@ services:
     environment:
       - REDIS_URL=redis://redis:6379/0
       - DATABASE_URL=postgresql://insider:insider_pass@postgres:5432/insider_detection
-    expose:
-      - "8000"
+    ports:
+      - "8001:8000"
     depends_on:
-      - redis
-    profiles:
-      - tools
       redis:
         condition: service_healthy
       postgres:
         condition: service_healthy
+    networks:
+      - proyect_net
+
+  inference:
+    build:
+      context: .
+      dockerfile: Dockerfile.inference
+    environment:
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_DB=insider_detection
+      - POSTGRES_USER=insider
+      - POSTGRES_PASSWORD=insider_pass
+      - API_URL=http://api:8000
+    depends_on:
+      postgres:
+        condition: service_healthy
+      api:
+        condition: service_started
     networks:
       - proyect_net
 
@@ -91,6 +124,7 @@ services:
     environment:
       - REDIS_URL=redis://redis:6379/0
       - DATABASE_URL=postgresql://insider:insider_pass@postgres:5432/insider_detection
+      - INFERENCE_URL=http://inference:8000
       - LOG_DIR=/app/logs
     depends_on:
       redis:

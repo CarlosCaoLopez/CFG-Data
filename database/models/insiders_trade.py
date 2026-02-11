@@ -3,7 +3,7 @@
 # Stores trades detected as insider trading from Redis listener
 from datetime import datetime, UTC
 from decimal import Decimal
-from sqlalchemy import String, Numeric, DateTime, ForeignKey, Index
+from sqlalchemy import String, Numeric, DateTime, Boolean, ForeignKey, Index
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from database.base import Base
 
@@ -22,6 +22,7 @@ class InsidersTrade(Base):
     prize: Mapped[Decimal] = mapped_column(Numeric)
     size_usdc: Mapped[Decimal] = mapped_column(Numeric)
     size_tokens: Mapped[Decimal] = mapped_column(Numeric)
+    last_trade: Mapped[bool] = mapped_column(Boolean, default=False)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=datetime.now(UTC),

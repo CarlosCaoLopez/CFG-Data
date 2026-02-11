@@ -5,6 +5,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 from datetime import datetime
 from sqlalchemy import text
+import httpx
 from celery.utils.log import get_task_logger
 from workers.celery_app import app
 from contracts.processing_job import JobResult
@@ -38,8 +39,8 @@ def calculate_i_score(self, job_dict: dict) -> JobResult:
     trade_volume = float(trade.get("size_usdc", 0))
     # No tenemos un winning_outcome. Como sé cuál de los dos ha ganado????????????????????????????????????????????????????????
     is_win = 1 if market.get("closed") and market.get("winning_outcome") == trade.get("outcome") else 0
-    p_market = float(trade.get("prize"))
-    delta_elo = float(os.environ.get("ELO_K_FACTOR")) * math.log(1 + trade_volume) * (is_win - p_market)
+    p_market = float(trade.get("price"))
+    delta_elo = float(os.environ.get("ELO_K_FACTOR", "32")) * math.log(1 + trade_volume) * (is_win - p_market)
 
     # Component 2 and 3
     fmt = "%Y-%m-%dT%H:%M:%S.%fZ"
@@ -117,9 +118,8 @@ def compute_variables(self, market_id: str) -> dict:
 
         processing_time_ms = int((time.time() - start_time) * 1000)
 
-        ######################################################################
-        ## TODO: Mandar la tarea al motor de cálculo. Parámetros: ID_market ##
-        ######################################################################
+        # Dispatch D: send market_id to the R/Plumber inference engine
+        run_market_inference.delay(market_id)
 
         return {
             "market_id": market_id,
@@ -159,6 +159,96 @@ def cleanup_stale_trades(self) -> dict:
     except Exception as e:
         logger.error(f"Error en cleanup_stale_trades: {str(e)}", exc_info=True)
         raise
+
+
+@app.task(bind=True, max_retries=3)
+def cleanup_market(self, market_id: str) -> dict:
+    """
+    Task T4 (reactive): Deletes all trades and closed_market_variables for a processed
+    market. Triggered by E immediately after D finishes, so data is removed as soon as
+    the motor de cálculo has consumed it.
+
+    FK order: CMV first (cmv.trade_id → trades.id), then trades.
+    If E already deleted CMV inline, the first DELETE is a no-op.
+    """
+    logger.info(f"T4: cleanup_market starting for market_id={market_id}")
+    start_time = time.time()
+
+    try:
+        with get_sync_session() as session:
+            cmv_result = session.execute(
+                text("DELETE FROM closed_market_variables WHERE market_id = :mid"),
+                {"mid": market_id},
+            )
+            trade_result = session.execute(
+                text("DELETE FROM trades WHERE market_id = :mid"),
+                {"mid": market_id},
+            )
+            session.commit()
+
+        processing_time_ms = int((time.time() - start_time) * 1000)
+        logger.info(
+            f"T4: cleanup_market done for market_id={market_id} "
+            f"cmv_rows={cmv_result.rowcount} trade_rows={trade_result.rowcount} "
+            f"time={processing_time_ms}ms"
+        )
+        return {
+            "success": True,
+            "task": "cleanup_market",
+            "market_id": market_id,
+            "cmv_rows_deleted": cmv_result.rowcount,
+            "trade_rows_deleted": trade_result.rowcount,
+            "processing_time_ms": processing_time_ms,
+        }
+    except Exception as e:
+        logger.error(f"T4: cleanup_market failed for {market_id}: {e}", exc_info=True)
+        raise self.retry(exc=e, countdown=2 ** self.request.retries)
+
+
+@app.task(bind=True, max_retries=3)
+def run_market_inference(self, market_id: str) -> dict:
+    """
+    Task D: calls the R/Plumber inference service (Motor de Cálculo) for a market.
+
+    The inference service:
+      1. Reads closed_market_variables for this market
+      2. Fits distributions and detects statistical outliers (insiders)
+      3. POSTs results to the REST API (E) → /insider-detection
+
+    INFERENCE_URL env var (default: http://inference:8000).
+    Retries up to 3 times with exponential backoff (30s, 60s, 120s).
+    """
+    inference_url = os.environ.get("INFERENCE_URL", "http://inference:8000") + "/analyze"
+
+    try:
+        response = httpx.post(
+            inference_url,
+            json={"market_id": market_id},
+            timeout=180.0,  # R analysis may take a while on large datasets
+        )
+        response.raise_for_status()
+        result = response.json()
+
+        # R/Plumber may return scalars as single-element arrays; normalise to str
+        raw_status = result.get("status")
+        status_str = raw_status[0] if isinstance(raw_status, list) else raw_status
+
+        insiders_found = len(result.get("insiders", []))
+        logger.info(
+            f"Inference completed for market_id={market_id}: "
+            f"status={status_str}, insiders={insiders_found}"
+        )
+
+        return {
+            "market_id":         market_id,
+            "success":           True,
+            "inference_status":  status_str,
+            "insiders_found":    insiders_found,
+        }
+
+    except Exception as e:
+        logger.error(f"Inference failed for market_id={market_id}: {e}", exc_info=True)
+        raise self.retry(exc=e, countdown=30 * (2 ** self.request.retries))
 
 
 @app.task(bind=True, max_retries=3)

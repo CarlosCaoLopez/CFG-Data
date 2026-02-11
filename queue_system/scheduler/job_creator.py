@@ -62,9 +62,9 @@ class JobCreator:
         wallet_age = batch.wallet_ages.get(trade.wallet)
 
         payload = {
-            'trade': trade.model_dump(),
-            'market': batch.metadata.model_dump(),
-            'wallet_age': wallet_age.model_dump() if wallet_age else None
+            'trade': trade.model_dump(mode='json'),
+            'market': batch.metadata.model_dump(mode='json'),
+            'wallet_age': wallet_age.model_dump(mode='json') if wallet_age else None
         }
 
         job = ProcessingJob(

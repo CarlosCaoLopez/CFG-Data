@@ -1,11 +1,19 @@
 # Queue Orchestrator - Main loop for Persona B
-# Reads from raw_data + closed_markets, converts batches to jobs, publishes to jobs_stream
+# Reads from raw_data + closed_markets + insider_trades.
+# T1 inline: persists MarketDataBatch (market + wallets + trades) to BD, then dispatches T2.
+# T1 inline: persists InsiderTradeData (insider trades) to BD.
 
 import asyncio
+from datetime import datetime, UTC
+
 from queue_system.streams.raw_data_stream import RawDataStream
 from queue_system.streams.jobs_stream import JobsStream
+from queue_system.streams.insider_trades_stream import InsiderTradesStream
 from queue_system.scheduler.job_creator import JobCreator
 from queue_system.config import QueueConfig
+from database.connection import async_session
+from database.manager import DatabaseManager
+from contracts.raw_market_data import RawMarketMetadata, RawWalletAge, RawTrade
 import structlog
 
 logger = structlog.get_logger()
@@ -15,16 +23,18 @@ class QueueOrchestrator:
     """
     Main orchestration loop for Persona B (Queue & Orchestration).
 
-    Responsibilities:
+    Responsibilities (Arquitectura Servilleta):
     1. Reads MarketDataBatch from raw_data + closed_markets (published by Persona A)
-    2. Converts batches to ProcessingJobs using JobCreator
-    3. Enqueues jobs to jobs_stream (consumed by Persona C workers)
-    4. Creates consumer groups for all streams (including insider_trades for T1)
-    5. Handles errors and monitors throughput
+    2. Persists each batch to BD: Markets, Trades, Wallets  [T1 inline — stub for Persona C]
+    3. Dispatches T2 (compute_variables) via Celery after persisting each closed market
+    4. Reads InsiderTradeData from insider_trades (published by L2)
+    5. Persists each InsiderTradeData to BD: Insiders_Trades  [T1 inline — stub for Persona C]
+    6. Creates consumer groups for all streams on startup
 
     Usage:
         async with QueueOrchestrator(raw_stream, jobs_stream, creator,
-                                     closed_markets_stream=cm_stream) as orch:
+                                     closed_markets_stream=cm_stream,
+                                     insider_trades_stream=it_stream) as orch:
             await orch.run()
     """
 
@@ -37,22 +47,25 @@ class QueueOrchestrator:
         consumer_group: str = "scheduler",
         consumer_name: str = "scheduler-1",
         closed_markets_stream: RawDataStream | None = None,
+        insider_trades_stream: InsiderTradesStream | None = None,
     ):
         """
         Initialize orchestrator with stream connections.
 
         Args:
-            raw_data_stream: Stream for reading MarketDataBatch from Persona A (backfill)
-            jobs_stream: Stream for publishing ProcessingJobs to Persona C
-            job_creator: JobCreator instance for converting batches to jobs
+            raw_data_stream: Stream for reading MarketDataBatch from backfill
+            jobs_stream: Kept for backward compatibility (not used in main flow)
+            job_creator: JobCreator instance (kept for backward compatibility)
             config: Optional QueueConfig (uses defaults if None)
             consumer_group: Consumer group name for input streams
             consumer_name: Consumer name for this orchestrator instance
-            closed_markets_stream: Stream for reading MarketDataBatch from L1 (realtime closures)
+            closed_markets_stream: Stream for reading MarketDataBatch from L1
+            insider_trades_stream: Stream for reading InsiderTradeData from L2
         """
         self.raw_data_stream = raw_data_stream
         self.jobs_stream = jobs_stream
         self.closed_markets_stream = closed_markets_stream
+        self.insider_trades_stream = insider_trades_stream
         self.job_creator = job_creator
         self.config = config or QueueConfig()
         self.consumer_group = consumer_group
@@ -70,47 +83,45 @@ class QueueOrchestrator:
 
         # Metrics
         self._batches_processed = 0
-        self._jobs_created = 0
         self._errors = 0
 
     async def setup(self) -> None:
         """
         Initialize consumer groups for all streams.
-        Must be called before run().
-
-        Creates groups for:
-        - raw_data (orchestrator reads backfill batches)
-        - closed_markets (orchestrator reads L1 closure batches)
-        - insider_trades (T1 reads L2 insider data — group created here for readiness)
-        - jobs_stream (workers consume processing jobs)
-
-        This method is idempotent - calling it multiple times is safe.
+        Must be called before run(). Idempotent.
         """
         if self._setup_done:
             self.logger.debug("orchestrator_setup_already_done")
             return
 
         try:
-            # Create consumer group for raw_data_stream (orchestrator reads)
+            # Consumer group for raw_data_stream (backfill batches)
             await self.raw_data_stream.create_consumer_group(
                 consumer_group=self.consumer_group,
                 start_id="0"
             )
 
-            # Create consumer group for closed_markets_stream (orchestrator reads)
+            # Consumer group for closed_markets_stream (L1 realtime closures)
             if self.closed_markets_stream:
                 await self.closed_markets_stream.create_consumer_group(
                     consumer_group=self.consumer_group,
                     start_id="0"
                 )
 
-            # Create consumer group for insider_trades (T1 consumes, not orchestrator)
-            await self._ensure_consumer_group(
-                stream_name=self.config.insider_trades_stream_name,
-                group_name=self.config.insider_trades_consumer_group,
-            )
+            # Consumer group for insider_trades (T1 reads here)
+            if self.insider_trades_stream:
+                await self.insider_trades_stream.create_consumer_group(
+                    consumer_group=self.config.insider_trades_consumer_group,
+                    start_id="0"
+                )
+            else:
+                # Ensure group exists even if stream instance not provided
+                await self._ensure_consumer_group(
+                    stream_name=self.config.insider_trades_stream_name,
+                    group_name=self.config.insider_trades_consumer_group,
+                )
 
-            # Create consumer group for jobs_stream (workers consume)
+            # Consumer group for jobs_stream (kept for backward compatibility)
             await self.jobs_stream.create_consumer_group()
 
             self._setup_done = True
@@ -122,8 +133,10 @@ class QueueOrchestrator:
                     self.closed_markets_stream.stream_name
                     if self.closed_markets_stream else "not_configured"
                 ),
-                insider_trades_stream=self.config.insider_trades_stream_name,
-                jobs_stream=self.jobs_stream.stream_name,
+                insider_trades_stream=(
+                    self.insider_trades_stream.stream_name
+                    if self.insider_trades_stream else "not_configured"
+                ),
             )
 
         except Exception as e:
@@ -137,10 +150,7 @@ class QueueOrchestrator:
     async def _ensure_consumer_group(
         self, stream_name: str, group_name: str
     ) -> None:
-        """
-        Create a consumer group on any stream (idempotent).
-        Uses the Redis client from raw_data_stream.
-        """
+        """Create a consumer group on any stream (idempotent)."""
         redis = self.raw_data_stream.redis
         try:
             await redis.xgroup_create(
@@ -167,11 +177,26 @@ class QueueOrchestrator:
     async def run(self) -> None:
         """
         Main orchestration loop.
-        Reads from raw_data and closed_markets, converts to jobs, publishes.
-        Runs continuously until shutdown() is called.
+        Runs two concurrent loops:
+          - _run_market_batches_loop: closed_markets + raw_data → BD + T2
+          - _run_insider_trades_loop: insider_trades → BD
         """
         self.logger.info("orchestrator_started")
+        await asyncio.gather(
+            self._run_market_batches_loop(),
+            self._run_insider_trades_loop(),
+        )
+        self.logger.info(
+            "orchestrator_stopped",
+            batches_processed=self._batches_processed,
+            errors=self._errors
+        )
 
+    async def _run_market_batches_loop(self) -> None:
+        """
+        Reads MarketDataBatch from closed_markets + raw_data.
+        For each batch: persists to BD (stub) then dispatches T2.
+        """
         batch_size = self.config.orchestrator_batch_size
 
         while not self._shutdown:
@@ -194,8 +219,7 @@ class QueueOrchestrator:
                             exc_info=True
                         )
                         self._errors += 1
-
-                        # ACK the batch anyway to avoid blocking the queue
+                        # ACK anyway to avoid blocking the queue
                         await source_stream.ack(
                             consumer_group=self.consumer_group,
                             message_id=message_id
@@ -208,33 +232,63 @@ class QueueOrchestrator:
                     exc_info=True
                 )
                 self._errors += 1
-
-                # Backoff on error to avoid tight loop
                 await asyncio.sleep(5)
 
-        self.logger.info(
-            "orchestrator_stopped",
-            batches_processed=self._batches_processed,
-            jobs_created=self._jobs_created,
-            errors=self._errors
-        )
+    async def _run_insider_trades_loop(self) -> None:
+        """
+        Reads InsiderTradeData from insider_trades stream.
+        Persists each item to BD: Insiders_Trades (stub for Persona C).
+        """
+        if not self.insider_trades_stream:
+            self.logger.info("insider_trades_loop_disabled")
+            return
+
+        while not self._shutdown:
+            try:
+                items = await self.insider_trades_stream.read(
+                    consumer_group=self.config.insider_trades_consumer_group,
+                    consumer_name=self.consumer_name,
+                    count=10,
+                    block_ms=5000,
+                )
+                for message_id, data in items:
+                    try:
+                        await self._process_insider_trade(message_id, data)
+                    except Exception as e:
+                        self.logger.error(
+                            "insider_trade_processing_failed",
+                            message_id=message_id,
+                            wallet=data.wallet,
+                            error=str(e),
+                            exc_info=True
+                        )
+                        self._errors += 1
+                        await self.insider_trades_stream.ack(
+                            self.config.insider_trades_consumer_group, message_id
+                        )
+
+            except Exception as e:
+                self.logger.error(
+                    "insider_trades_loop_error",
+                    error=str(e),
+                    exc_info=True
+                )
+                self._errors += 1
+                await asyncio.sleep(5)
 
     async def _read_all_streams(
         self, batch_size: int
     ) -> list[tuple[RawDataStream, str, 'MarketDataBatch']]:
         """
-        Read from all input streams (raw_data + closed_markets) in parallel.
-
+        Read from all market input streams (raw_data + closed_markets) in parallel.
         Returns list of (source_stream, message_id, batch) tuples.
         """
         input_streams = [self.raw_data_stream]
         if self.closed_markets_stream:
             input_streams.append(self.closed_markets_stream)
 
-        # Split block time across streams so total wait is ~5s
         block_ms = 5000 // len(input_streams)
 
-        # Read from all streams in parallel
         read_tasks = [
             stream.read(
                 consumer_group=self.consumer_group,
@@ -264,35 +318,99 @@ class QueueOrchestrator:
 
         return all_batches
 
+    # ================================================================
+    # CONTRACT → DB DICT CONVERTERS
+    # ================================================================
+
+    @staticmethod
+    def _market_to_dict(meta: RawMarketMetadata) -> dict:
+        return {
+            "market_id":      meta.market_id,
+            "question":       meta.question,
+            "end_date":       meta.end_date,
+            "closed":         meta.closed,
+            "outcome_prices": meta.outcome_prices,
+            "volume_usdc":    meta.volume_usdc,
+            "categories":     [meta.category] if meta.category else [],
+            "tags":           meta.tags or [],
+            "winning_outcome": meta.winning_outcome,
+            "updated_at":     datetime.now(UTC),
+        }
+
+    @staticmethod
+    def _wallet_to_dict(age: RawWalletAge) -> dict:
+        return {
+            "address":            age.wallet,
+            "first_seen_at":      age.first_tx_polymarket or age.first_tx_polygon,
+            "first_tx_polymarket": age.first_tx_polymarket,
+            "first_tx_polygon":   age.first_tx_polygon,
+            "updated_at":         datetime.now(UTC),
+        }
+
+    @staticmethod
+    def _trade_to_dict(trade: RawTrade) -> dict:
+        return {
+            "id":          trade.tx_hash,
+            "wallet_id":   trade.wallet,
+            "market_id":   trade.market_id,
+            "timestamp":   trade.timestamp,
+            "side":        trade.side,
+            "outcome":     trade.outcome,
+            "prize":       trade.price,   # contract field is 'price', DB column is 'prize'
+            "size_usdc":   trade.size_usdc,
+            "size_tokens": trade.size_tokens,
+            "last_trade":  trade.last_trade,
+            "updated_at":  datetime.now(UTC),
+        }
+
+    # ================================================================
+    # T1 PROCESSING
+    # ================================================================
+
     async def _process_batch(
         self, message_id: str, batch, source_stream: RawDataStream
     ) -> None:
         """
-        Process a single MarketDataBatch from any input stream.
+        T1 inline: persist MarketDataBatch to BD, then dispatch T2.
 
-        Args:
-            message_id: Redis message ID for ACK
-            batch: MarketDataBatch to process
-            source_stream: The stream this batch came from (for ACK)
+        FK order: wallets first → market → trades (respects FK constraints).
+        Trades are inserted as a single batch statement (ON CONFLICT DO NOTHING).
         """
-        start_time = asyncio.get_event_loop().time()
+        from celery import current_app as celery_app
 
-        # Convert batch to jobs
-        jobs = await self.job_creator.process_batch(batch)
+        async with async_session() as session:
+            db = DatabaseManager(session)
 
-        # Enqueue each job
-        jobs_enqueued = 0
-        for job in jobs:
-            try:
-                await self.jobs_stream.add_job(job)
-                jobs_enqueued += 1
-            except Exception as e:
-                self.logger.error(
-                    "job_enqueue_failed",
-                    job_id=job.job_id,
-                    job_type=job.job_type.value,
-                    error=str(e)
+            # 1. Upsert wallets (small n, ~20-50 per batch; loop is acceptable)
+            for age in batch.wallet_ages.values():
+                await db.upsert_wallet(self._wallet_to_dict(age))
+
+            # 2. Upsert market
+            await db.upsert_market(self._market_to_dict(batch.metadata))
+
+            # 3. Upsert trades in a single batch statement
+            if batch.trades:
+                await db.upsert_trade_batch(
+                    [self._trade_to_dict(t) for t in batch.trades]
                 )
+
+        self.logger.info(
+            "t1_persisted",
+            market_id=batch.metadata.market_id,
+            trades=len(batch.trades),
+            wallets=len(batch.wallet_ages),
+            source=source_stream.stream_name,
+        )
+
+        # Dispatch T2: compute SQL variables for this closed market
+        celery_app.send_task(
+            'workers.tasks.compute_variables',
+            args=[batch.metadata.market_id],
+        )
+        self.logger.info(
+            "t2_dispatched",
+            market_id=batch.metadata.market_id,
+        )
 
         # ACK the batch in its source stream
         await source_stream.ack(
@@ -300,11 +418,7 @@ class QueueOrchestrator:
             message_id=message_id
         )
 
-        # Update metrics
         self._batches_processed += 1
-        self._jobs_created += jobs_enqueued
-
-        elapsed_ms = int((asyncio.get_event_loop().time() - start_time) * 1000)
 
         self.logger.info(
             "batch_processed",
@@ -312,94 +426,76 @@ class QueueOrchestrator:
             market_id=batch.metadata.market_id,
             source_stream=source_stream.stream_name,
             trades_in_batch=len(batch.trades),
-            jobs_created=len(jobs),
-            jobs_enqueued=jobs_enqueued,
-            processing_time_ms=elapsed_ms
+        )
+
+    async def _process_insider_trade(self, message_id: str, data) -> None:
+        """
+        T1 inline for insider_trades: persist InsiderTradeData to BD.
+        Inserts all trades for the wallet as a single batch statement.
+        """
+        if data.trades:
+            async with async_session() as session:
+                db = DatabaseManager(session)
+                await db.upsert_insider_trade_batch(
+                    [self._trade_to_dict(t) for t in data.trades]
+                )
+
+        self.logger.info(
+            "t1_insider_persisted",
+            wallet=data.wallet,
+            trades=len(data.trades),
+            categories=data.categories_insider,
+        )
+
+        await self.insider_trades_stream.ack(
+            self.config.insider_trades_consumer_group, message_id
+        )
+
+        self.logger.info(
+            "insider_trade_processed",
+            message_id=message_id,
+            wallet=data.wallet,
+            trades=len(data.trades),
         )
 
     def shutdown(self) -> None:
-        """
-        Signal the orchestrator to stop gracefully.
-        The run() loop will complete its current iteration and exit.
-        """
+        """Signal the orchestrator to stop gracefully."""
         self.logger.info("orchestrator_shutdown_requested")
         self._shutdown = True
 
     async def cleanup(self) -> None:
-        """
-        Clean up orchestrator resources.
-
-        Note: Does NOT close Redis connections as they are managed externally.
-        Only resets internal state (SOLID principle).
-        """
+        """Clean up orchestrator resources (resets internal state)."""
         self.logger.info(
             "orchestrator_cleanup_started",
             batches_processed=self._batches_processed,
-            jobs_created=self._jobs_created,
             errors=self._errors
         )
-
-        # Reset lifecycle flags
         self._setup_done = False
         self._shutdown = False
-
-        # Optionally reset metrics (uncomment if needed)
-        # self._batches_processed = 0
-        # self._jobs_created = 0
-        # self._errors = 0
-
         self.logger.info("orchestrator_cleanup_complete")
 
     async def __aenter__(self):
-        """
-        Async context manager entry.
-        Automatically calls setup() when entering the context.
-
-        Usage:
-            async with QueueOrchestrator(...) as orch:
-                await orch.run()
-        """
         await self.setup()
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):  # noqa: ARG002
-        """
-        Async context manager exit.
-        Automatically calls shutdown() and cleanup() when exiting the context.
-
-        Args:
-            exc_type: Exception type if an exception occurred (unused)
-            exc_val: Exception value if an exception occurred (unused)
-            exc_tb: Exception traceback if an exception occurred (unused)
-
-        Returns:
-            False to propagate exceptions (does not suppress them)
-        """
-        # Signal shutdown if still running
         if not self._shutdown:
             self.shutdown()
-
-        # Clean up resources
         await self.cleanup()
-
-        # Don't suppress exceptions
         return False
 
     async def get_metrics(self) -> dict:
-        """
-        Returns current orchestrator metrics including all streams.
-        """
+        """Returns current orchestrator metrics."""
         try:
             pending_raw = await self.raw_data_stream.get_pending_count(
                 consumer_group=self.consumer_group
             )
-            pending_jobs = await self.jobs_stream.get_pending_count()
 
             stream_lengths = {
                 'raw_data': await self.raw_data_stream.get_stream_length(),
-                'jobs': await self.jobs_stream.get_stream_length(),
             }
 
+            pending_closed = 0
             if self.closed_markets_stream:
                 pending_closed = await self.closed_markets_stream.get_pending_count(
                     consumer_group=self.consumer_group
@@ -407,36 +503,23 @@ class QueueOrchestrator:
                 stream_lengths['closed_markets'] = (
                     await self.closed_markets_stream.get_stream_length()
                 )
-            else:
-                pending_closed = 0
 
-            # insider_trades length (read-only, not consumed by orchestrator)
-            try:
-                insider_len = await self.raw_data_stream.redis.xlen(
-                    self.config.insider_trades_stream_name
+            if self.insider_trades_stream:
+                stream_lengths['insider_trades'] = (
+                    await self.insider_trades_stream.get_stream_length()
                 )
-                stream_lengths['insider_trades'] = insider_len
-            except Exception:
-                pass
 
             return {
                 'batches_processed': self._batches_processed,
-                'jobs_created': self._jobs_created,
                 'errors': self._errors,
                 'pending_batches_raw': pending_raw,
                 'pending_batches_closed': pending_closed,
-                'pending_jobs': pending_jobs,
                 'stream_lengths': stream_lengths,
             }
         except Exception as e:
-            self.logger.error(
-                "get_metrics_failed",
-                error=str(e),
-                exc_info=True
-            )
+            self.logger.error("get_metrics_failed", error=str(e), exc_info=True)
             return {
                 'batches_processed': self._batches_processed,
-                'jobs_created': self._jobs_created,
                 'errors': self._errors,
                 'error': str(e),
             }

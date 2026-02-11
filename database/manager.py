@@ -111,6 +111,24 @@ class DatabaseManager:
         await self.session.execute(stmt)
         await self.session.commit()
 
+    async def upsert_trade_batch(self, trades: list[dict]):
+        """
+        Inserts a batch of trades, ignoring duplicates (idempotent).
+        Trades are immutable once written, so ON CONFLICT DO NOTHING is correct.
+        """
+        stmt = insert(Trade).values(trades)
+        stmt = stmt.on_conflict_do_nothing(index_elements=["id"])
+        await self.session.execute(stmt)
+        await self.session.commit()
+
+    async def upsert_insider_trade_batch(self, insider_trades: list[dict]):
+        """
+        Inserts a batch of insider trades, ignoring duplicates (idempotent).
+        """
+        stmt = insert(InsidersTrade).values(insider_trades)
+        stmt = stmt.on_conflict_do_nothing(index_elements=["id"])
+        await self.session.execute(stmt)
+        await self.session.commit()
 
     async def upsert_closed_market_variables(self, cmv_data: dict):
         """

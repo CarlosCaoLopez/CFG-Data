@@ -2,6 +2,7 @@ import logging
 from fastapi import FastAPI, Depends
 from pydantic import BaseModel, Field
 from typing import Literal
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from database.connection import get_session
@@ -89,6 +90,25 @@ async def receive_insider_detection(
             msg = f"T3 dispatch failed for {wallet_result.wallet}: {e}"
             logger.error(msg, exc_info=True)
             errors.append(msg)
+
+    # 3. Delete closed_market_variables for this market (architecture: E cleans CMV after D)
+    try:
+        await session.execute(
+            text("DELETE FROM closed_market_variables WHERE market_id = :mid"),
+            {"mid": batch.market_id},
+        )
+        await session.commit()
+        logger.info(f"CMV deleted for market_id={batch.market_id}")
+    except Exception as e:
+        logger.error(f"CMV cleanup failed for {batch.market_id}: {e}", exc_info=True)
+
+    # 4. Dispatch T4: delete trades for this processed market
+    try:
+        from workers.tasks import cleanup_market
+        cleanup_market.delay(batch.market_id)
+        logger.info(f"T4 dispatched for market_id={batch.market_id}")
+    except Exception as e:
+        logger.error(f"T4 dispatch failed for {batch.market_id}: {e}", exc_info=True)
 
     if wallets_updated == 0:
         status = "error"
