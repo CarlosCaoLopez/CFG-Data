@@ -82,6 +82,22 @@ class MarketCloseListener:
             "markets_filtered_out": 0,
         }
 
+    def refresh_interests(self, new_categories: list[str]) -> None:
+        """Replace the in-memory category filter. Takes effect on the next polling cycle."""
+        self._interests = set(s.lower() for s in new_categories)
+        # Prune tracked markets that no longer match the new interests
+        to_remove = [
+            mid for mid, meta in list(self._tracked_markets.items())
+            if not self._matches_categories(meta)
+        ]
+        for mid in to_remove:
+            del self._tracked_markets[mid]
+        self.logger.info(
+            "interests_refreshed",
+            new_interests=list(self._interests),
+            pruned_markets=len(to_remove),
+        )
+
     @property
     def tracked_count(self) -> int:
         return len(self._tracked_markets)
@@ -324,6 +340,16 @@ class MarketCloseListener:
                     condition_id
                 )
                 if market and market.get("closed"):
+                    # fetch_market_by_id (?condition_ids=X) never returns category/tags.
+                    # Merge them from the tracked metadata so they are persisted to the DB.
+                    tracked = self._tracked_markets.get(condition_id, {})
+                    if not market.get("category") and tracked.get("category"):
+                        market["category"] = tracked["category"]
+                    if not market.get("events") and tracked.get("events"):
+                        market["events"] = tracked["events"]
+                    # WebSocket-discovered markets store tags directly, not in events
+                    if not market.get("events") and tracked.get("tags"):
+                        market["events"] = [{"tags": tracked["tags"]}]
                     self.logger.info(
                         "market_close_detected",
                         condition_id=condition_id[:20] + "...",

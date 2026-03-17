@@ -1,0 +1,96 @@
+{% extends "base.html" %}
+{% block title %}Variables CMV{% endblock %}
+{% block content %}
+<div x-data="variablesPage()" x-init="load()">
+
+  <div class="flex items-center justify-between mb-6">
+    <h2 class="text-xl font-bold text-white">Closed Market Variables <span class="text-sm font-normal text-slate-400">(en vuelo — Motor D)</span></h2>
+    <button @click="load()" class="btn-ghost text-xs">↻ Actualizar</button>
+  </div>
+
+  <!-- Summary cards per market in flight -->
+  <div x-show="!selected_market" class="space-y-3">
+    <p x-show="!summary.length" class="text-slate-500 text-center py-12">
+      No hay markets siendo procesados por el Motor D ahora mismo. ✅
+    </p>
+    <template x-for="m in summary" :key="m.market_id">
+      <div class="card cursor-pointer hover:border-indigo-500 transition-colors" @click="drill(m.market_id)">
+        <div class="flex items-start justify-between gap-4">
+          <div class="flex-1 min-w-0">
+            <p class="text-slate-200 text-sm font-medium line-clamp-2" x-text="m.question || m.market_id"></p>
+            <p class="text-xs font-mono text-slate-500 mt-0.5" x-text="m.market_id?.slice(0,20)+'…'"></p>
+          </div>
+          <div class="flex gap-4 shrink-0 text-center">
+            <div>
+              <p class="text-lg font-bold text-yellow-400" x-text="m.wallet_count"></p>
+              <p class="text-xs text-slate-500">Wallets</p>
+            </div>
+            <div>
+              <p class="text-lg font-bold text-blue-400" x-text="m.row_count"></p>
+              <p class="text-xs text-slate-500">Filas CMV</p>
+            </div>
+            <div>
+              <p class="text-lg font-bold text-slate-300" x-text="parseFloat(m.avg_delta_t || 0).toFixed(1) + 'h'"></p>
+              <p class="text-xs text-slate-500">Δt medio</p>
+            </div>
+            <div>
+              <p class="text-lg font-bold text-slate-300" x-text="parseFloat(m.avg_entropy || 0).toFixed(3)"></p>
+              <p class="text-xs text-slate-500">H medio</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </template>
+  </div>
+
+  <!-- Drill-down table -->
+  <div x-show="selected_market" x-cloak>
+    <button @click="selected_market = null; detail = []" class="btn-ghost mb-4">← Volver</button>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Wallet</th>
+            <th class="text-right">Δt (h)</th>
+            <th class="text-right">Age (días)</th>
+            <th class="text-right">Win. Volume</th>
+            <th class="text-right">α Slippage</th>
+            <th class="text-right">H (entropía)</th>
+          </tr>
+        </thead>
+        <tbody>
+          <template x-for="v in detail" :key="v.trade_id">
+            <tr>
+              <td class="font-mono text-xs text-indigo-400" x-text="v.wallet_id?.slice(0,10)+'…'"></td>
+              <td class="text-right font-mono text-xs" x-text="parseFloat(v.delta_t ?? 0).toFixed(2)"></td>
+              <td class="text-right font-mono text-xs" x-text="parseFloat(v.age ?? 0).toFixed(1)"></td>
+              <td class="text-right font-mono text-xs" x-text="'$' + parseFloat(v.winning_volume ?? 0).toFixed(2)"></td>
+              <td class="text-right font-mono text-xs" x-text="parseFloat(v.alpha_slippage ?? 0).toFixed(4)"></td>
+              <td class="text-right font-mono text-xs" x-text="parseFloat(v.entropy ?? 0).toFixed(4)"></td>
+            </tr>
+          </template>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<script>
+function variablesPage() {
+  return {
+    summary: [], detail: [], selected_market: null,
+    async load() {
+      const r = await fetch('/api/variables');
+      const d = await r.json();
+      this.summary = d.summary || [];
+    },
+    async drill(market_id) {
+      this.selected_market = market_id;
+      const r = await fetch('/api/variables?market_id=' + market_id + '&limit=200');
+      const d = await r.json();
+      this.detail = d.items || [];
+    },
+  }
+}
+</script>
+{% endblock %}

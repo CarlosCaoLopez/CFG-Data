@@ -10,11 +10,13 @@
 import asyncio
 import signal
 import structlog
+import uvicorn
 
 from ingestion.config import get_settings
 from ingestion.publisher import RedisPublisher
 from ingestion.listeners.market_close_listener import MarketCloseListener
 from ingestion.listeners.insider_trades_listener import InsiderTradesListener
+from ingestion.stats_server import stats_app, set_listeners
 
 logger = structlog.get_logger()
 
@@ -61,11 +63,25 @@ async def main() -> None:
         await l2.stop()
         await publisher.close()
 
+    async def _run_stats_server() -> None:
+        set_listeners(l1, l2)
+        config = uvicorn.Config(
+            stats_app,
+            host="0.0.0.0",
+            port=9001,
+            loop="none",
+            log_level="warning",
+            access_log=False,
+        )
+        server = uvicorn.Server(config)
+        await server.serve()
+
     try:
         await asyncio.gather(
             l1.run(),
             l2.run(),
             _shutdown_watcher(),
+            _run_stats_server(),
         )
     except asyncio.CancelledError:
         pass

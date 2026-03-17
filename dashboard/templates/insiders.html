@@ -1,0 +1,128 @@
+{% extends "base.html" %}
+{% block title %}Insiders{% endblock %}
+{% block content %}
+<div x-data="insidersPage()" x-init="load()">
+
+  <div class="flex items-center justify-between mb-6">
+    <h2 class="text-xl font-bold text-white">Insider Wallets</h2>
+    <button @click="load()" class="btn-ghost text-xs">↻ Actualizar</button>
+  </div>
+
+  <div class="card mb-4 flex gap-3 items-center flex-wrap">
+    <input x-model="filter_category" @keyup.enter="load()" class="input" placeholder="Filtrar por categoría…"/>
+    <button @click="load()" class="btn-primary">Filtrar</button>
+    <span class="text-xs text-slate-500 ml-auto" x-text="total + ' insiders'"></span>
+  </div>
+
+  <div class="table-wrap mb-4">
+    <table>
+      <thead>
+        <tr>
+          <th>Wallet</th>
+          <th>Categorías insider</th>
+          <th>Markets</th>
+          <th>Trades insider</th>
+          <th>Volumen total</th>
+          <th>Antigüedad (Polygon)</th>
+          <th>Detectado</th>
+        </tr>
+      </thead>
+      <tbody>
+        <template x-for="w in items" :key="w.address">
+          <tr class="cursor-pointer" @click="select(w)">
+            <td><span class="font-mono text-indigo-400 text-xs" x-text="w.address.slice(0,10) + '…' + w.address.slice(-4)"></span></td>
+            <td>
+              <div class="flex flex-wrap gap-1">
+                <template x-for="cat in (w.categories_insider || [])"><span class="badge-red text-xs" x-text="cat"></span></template>
+              </div>
+            </td>
+            <td class="text-right" x-text="(w.marketids_insider || []).length"></td>
+            <td class="text-right" x-text="w.insider_trades_count"></td>
+            <td class="text-right font-mono text-xs" x-text="fmtUSD(w.total_volume_usdc)"></td>
+            <td class="text-xs text-slate-400" x-text="fmtDate(w.first_tx_polygon)"></td>
+            <td class="text-xs text-slate-400" x-text="fmtDate(w.updated_at)"></td>
+          </tr>
+        </template>
+        <tr x-show="!items.length">
+          <td colspan="7" class="text-center text-slate-500 py-8">Sin insiders detectados aún</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- Pagination -->
+  <div class="flex justify-between items-center mb-6">
+    <button @click="prevPage()" :disabled="page === 1" class="btn-ghost disabled:opacity-40">← Anterior</button>
+    <span class="text-xs text-slate-400" x-text="'Página ' + page"></span>
+    <button @click="nextPage()" :disabled="page * limit >= total" class="btn-ghost disabled:opacity-40">Siguiente →</button>
+  </div>
+
+  <!-- Detail panel -->
+  <div x-show="selected" x-cloak class="card">
+    <div class="flex items-center justify-between mb-4">
+      <h3 class="text-sm font-semibold text-white">Detalle: <span class="font-mono text-indigo-400" x-text="selected?.address"></span></h3>
+      <button @click="selected = null" class="btn-ghost text-xs">✕ Cerrar</button>
+    </div>
+    <div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-4">
+      <div class="bg-slate-700 rounded-lg p-3 text-center">
+        <p class="text-lg font-bold text-red-400" x-text="(selected?.insider_trades || []).length"></p>
+        <p class="text-xs text-slate-500">Trades insider</p>
+      </div>
+      <div class="bg-slate-700 rounded-lg p-3 text-center">
+        <p class="text-lg font-bold text-yellow-400" x-text="fmtUSD(selected?.total_volume_usdc)"></p>
+        <p class="text-xs text-slate-500">Volumen total</p>
+      </div>
+      <div class="bg-slate-700 rounded-lg p-3 text-center">
+        <p class="text-lg font-bold text-blue-400" x-text="selected?.markets_traded ?? 0"></p>
+        <p class="text-xs text-slate-500">Markets</p>
+      </div>
+      <div class="bg-slate-700 rounded-lg p-3 text-center">
+        <p class="text-xs text-slate-300 font-mono" x-text="fmtDate(selected?.first_tx_polygon)"></p>
+        <p class="text-xs text-slate-500">1ª tx Polygon</p>
+      </div>
+    </div>
+    <div class="table-wrap max-h-64 overflow-y-auto">
+      <table>
+        <thead><tr><th>Market</th><th>Timestamp</th><th>Side</th><th>Outcome</th><th>Price</th><th>USDC</th><th>Last</th></tr></thead>
+        <tbody>
+          <template x-for="t in (selected?.insider_trades || [])" :key="t.id">
+            <tr>
+              <td class="text-xs max-w-xs line-clamp-1" x-text="t.question || t.market_id?.slice(0,14)+'…'"></td>
+              <td class="text-xs font-mono" x-text="fmtDate(t.timestamp)"></td>
+              <td><span :class="t.side === 'BUY' ? 'badge-green' : 'badge-red'" x-text="t.side"></span></td>
+              <td x-text="t.outcome"></td>
+              <td class="font-mono text-xs" x-text="parseFloat(t.prize || 0).toFixed(3)"></td>
+              <td class="font-mono text-xs" x-text="fmtUSD(t.size_usdc)"></td>
+              <td><span x-show="t.last_trade" class="badge-yellow">✓</span></td>
+            </tr>
+          </template>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<script>
+function insidersPage() {
+  return {
+    items: [], total: 0, page: 1, limit: 50,
+    filter_category: '', selected: null,
+    async load() {
+      const params = new URLSearchParams({ page: this.page, limit: this.limit });
+      if (this.filter_category) params.set('category', this.filter_category);
+      const r = await fetch('/api/insiders?' + params);
+      const d = await r.json();
+      this.items = d.items; this.total = d.total;
+    },
+    async select(w) {
+      const r = await fetch('/api/insiders/' + w.address);
+      this.selected = await r.json();
+    },
+    nextPage() { this.page++; this.load(); },
+    prevPage() { if (this.page > 1) { this.page--; this.load(); } },
+    fmtUSD(n) { return '$' + parseFloat(n ?? 0).toLocaleString(undefined, {maximumFractionDigits: 0}); },
+    fmtDate(iso) { if (!iso) return '—'; return new Date(iso).toLocaleString(undefined, {month:'short', day:'numeric', hour:'2-digit', minute:'2-digit'}); },
+  }
+}
+</script>
+{% endblock %}

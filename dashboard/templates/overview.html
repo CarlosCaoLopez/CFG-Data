@@ -1,0 +1,112 @@
+{% extends "base.html" %}
+{% block title %}Overview{% endblock %}
+{% block content %}
+<div x-data="overviewPage()" x-init="load(); setInterval(load, 15000)">
+
+  <div class="flex items-center justify-between mb-6">
+    <h2 class="text-xl font-bold text-white">Overview</h2>
+    <span class="text-xs text-slate-400" x-text="'Última carga: ' + ts"></span>
+  </div>
+
+  <!-- KPI cards -->
+  <div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+    <div class="kpi-card">
+      <span class="kpi-label">Wallets</span>
+      <span class="kpi-value text-blue-400" x-text="fmt(d.total_wallets)"></span>
+    </div>
+    <div class="kpi-card">
+      <span class="kpi-label">Insiders detectados</span>
+      <span class="kpi-value text-red-400" x-text="fmt(d.total_insiders)"></span>
+      <span class="text-xs text-slate-500" x-text="fmt(d.detections_last_24h) + ' en 24h'"></span>
+    </div>
+    <div class="kpi-card">
+      <span class="kpi-label">Markets procesados</span>
+      <span class="kpi-value text-emerald-400" x-text="fmt(d.closed_markets)"></span>
+      <span class="text-xs text-slate-500" x-text="fmt(d.total_markets) + ' totales'"></span>
+    </div>
+    <div class="kpi-card">
+      <span class="kpi-label">Trades insider</span>
+      <span class="kpi-value text-yellow-400" x-text="fmt(d.insider_trades)"></span>
+      <span class="text-xs text-slate-500" x-text="fmt(d.total_trades) + ' totales'"></span>
+    </div>
+    <div class="kpi-card">
+      <span class="kpi-label">CMV en vuelo</span>
+      <span class="kpi-value" :class="d.cmv_in_flight > 0 ? 'text-yellow-400' : 'text-slate-500'" x-text="fmt(d.cmv_in_flight)"></span>
+      <span class="text-xs text-slate-500">Motor D procesando</span>
+    </div>
+  </div>
+
+  <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+    <!-- Categorías chart -->
+    <div class="card">
+      <h3 class="text-sm font-semibold text-slate-300 mb-4">Insiders por categoría</h3>
+      <div class="h-48 flex items-center justify-center">
+        <canvas id="catChart"></canvas>
+      </div>
+    </div>
+
+    <!-- Recent detections -->
+    <div class="card">
+      <h3 class="text-sm font-semibold text-slate-300 mb-3">Detecciones recientes</h3>
+      <div class="space-y-2">
+        <template x-for="det in d.recent_detections" :key="det.wallet">
+          <div class="flex items-center gap-3 py-1.5 border-b border-slate-700 last:border-0">
+            <div class="flex-1 min-w-0">
+              <a :href="'/insiders/' + det.wallet" class="text-xs font-mono text-indigo-400 hover:underline" x-text="short(det.wallet, 20)"></a>
+              <div class="flex gap-1 mt-0.5 flex-wrap">
+                <template x-for="cat in det.categories">
+                  <span class="badge-blue" x-text="cat"></span>
+                </template>
+              </div>
+            </div>
+            <span class="text-xs text-slate-500 shrink-0" x-text="fmtDate(det.detected_at)"></span>
+          </div>
+        </template>
+        <p x-show="d.recent_detections && d.recent_detections.length === 0" class="text-slate-500 text-sm text-center py-4">Sin detecciones aún</p>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+let _catChart = null;
+
+function overviewPage() {
+  return {
+    d: { total_wallets:0, total_insiders:0, total_markets:0, closed_markets:0, total_trades:0, insider_trades:0, cmv_in_flight:0, detections_last_24h:0, top_categories:[], recent_detections:[] },
+    ts: '—',
+
+    async load() {
+      try {
+        const r = await fetch('/api/overview');
+        this.d = await r.json();
+        this.ts = new Date().toLocaleTimeString();
+        this.$nextTick(() => this.renderChart());
+      } catch(e) { console.error(e); }
+    },
+
+    renderChart() {
+      const cats = this.d.top_categories || [];
+      if (!cats.length) return;
+      const ctx = document.getElementById('catChart');
+      if (!ctx) return;
+      if (_catChart) _catChart.destroy();
+      _catChart = new Chart(ctx, {
+        type: 'doughnut',
+        data: {
+          labels: cats.map(c => c.category),
+          datasets: [{ data: cats.map(c => c.count), backgroundColor: ['#6366f1','#f59e0b','#10b981','#ef4444','#3b82f6','#8b5cf6','#ec4899','#14b8a6'] }]
+        },
+        options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'right', labels: { color: '#94a3b8', font: { size: 11 } } } } }
+      });
+    },
+
+    fmt(n) { return (n ?? 0).toLocaleString(); },
+    fmtUSD(n) { return '$' + parseFloat(n ?? 0).toLocaleString(); },
+    short(s, n=16) { if (!s) return '—'; return s.length > n ? s.slice(0,6)+'…'+s.slice(-4) : s; },
+    fmtDate(iso) { if (!iso) return '—'; return new Date(iso).toLocaleString(undefined, {month:'short', day:'numeric', hour:'2-digit', minute:'2-digit'}); },
+  }
+}
+</script>
+{% endblock %}

@@ -1,0 +1,95 @@
+{% extends "base.html" %}
+{% block title %}Markets{% endblock %}
+{% block content %}
+<div x-data="marketsPage()" x-init="load()">
+
+  <div class="flex items-center justify-between mb-6">
+    <h2 class="text-xl font-bold text-white">Markets</h2>
+    <button @click="load()" class="btn-ghost text-xs">↻ Actualizar</button>
+  </div>
+
+  <!-- Filters -->
+  <div class="card mb-4 flex flex-wrap gap-3 items-center">
+    <select x-model="filter_closed" @change="load()" class="input">
+      <option value="">Todos</option>
+      <option value="true">Cerrados</option>
+      <option value="false">Abiertos</option>
+    </select>
+    <input x-model="filter_category" @keyup.enter="load()" class="input" placeholder="Categoría (ej: Sports)"/>
+    <button @click="load()" class="btn-primary">Filtrar</button>
+    <span class="text-xs text-slate-500 ml-auto" x-text="total + ' markets'"></span>
+  </div>
+
+  <!-- Table -->
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Pregunta</th>
+          <th>Categorías</th>
+          <th>Volumen</th>
+          <th>Trades</th>
+          <th>Insiders</th>
+          <th>Estado</th>
+          <th>Cierre</th>
+        </tr>
+      </thead>
+      <tbody>
+        <template x-for="m in items" :key="m.market_id">
+          <tr class="cursor-pointer hover:bg-slate-750" @click="window.location='/markets?detail=' + m.market_id">
+            <td class="max-w-xs">
+              <p class="text-slate-200 text-sm line-clamp-2" x-text="m.question"></p>
+              <p class="text-xs font-mono text-slate-500 mt-0.5" x-text="m.market_id.slice(0,18) + '…'"></p>
+            </td>
+            <td>
+              <div class="flex flex-wrap gap-1">
+                <template x-for="cat in (m.categories || [])"><span class="badge-blue" x-text="cat"></span></template>
+              </div>
+            </td>
+            <td class="text-right font-mono" x-text="fmtUSD(m.volume_usdc)"></td>
+            <td class="text-right" x-text="m.trades_count"></td>
+            <td class="text-right">
+              <span :class="m.insiders_count > 0 ? 'badge-red' : 'text-slate-500'" x-text="m.insiders_count > 0 ? m.insiders_count : '—'"></span>
+            </td>
+            <td>
+              <span :class="m.closed ? 'badge-green' : 'badge-yellow'" x-text="m.closed ? 'Cerrado' : 'Abierto'"></span>
+            </td>
+            <td class="text-xs text-slate-400" x-text="fmtDate(m.end_date)"></td>
+          </tr>
+        </template>
+        <tr x-show="!items.length">
+          <td colspan="7" class="text-center text-slate-500 py-8">Sin datos</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- Pagination -->
+  <div class="flex justify-between items-center mt-4">
+    <button @click="prevPage()" :disabled="page === 1" class="btn-ghost disabled:opacity-40">← Anterior</button>
+    <span class="text-xs text-slate-400" x-text="'Página ' + page + ' · ' + total + ' resultados'"></span>
+    <button @click="nextPage()" :disabled="page * limit >= total" class="btn-ghost disabled:opacity-40">Siguiente →</button>
+  </div>
+</div>
+
+<script>
+function marketsPage() {
+  return {
+    items: [], total: 0, page: 1, limit: 50,
+    filter_closed: '', filter_category: '',
+    async load() {
+      const params = new URLSearchParams({ page: this.page, limit: this.limit });
+      if (this.filter_closed) params.set('closed', this.filter_closed);
+      if (this.filter_category) params.set('category', this.filter_category);
+      const r = await fetch('/api/markets?' + params);
+      const d = await r.json();
+      this.items = d.items; this.total = d.total;
+    },
+    nextPage() { this.page++; this.load(); },
+    prevPage() { if (this.page > 1) { this.page--; this.load(); } },
+    fmtUSD(n) { return '$' + parseFloat(n ?? 0).toLocaleString(undefined, {maximumFractionDigits: 0}); },
+    fmtDate(iso) { if (!iso) return '—'; return new Date(iso).toLocaleDateString(undefined, {month:'short', day:'numeric', year:'numeric'}); },
+  }
+}
+</script>
+{% endblock %}

@@ -1,0 +1,120 @@
+{% extends "base.html" %}
+{% block title %}Configuración{% endblock %}
+{% block content %}
+<div x-data="settingsPage()" x-init="load()">
+
+  <div class="flex items-center justify-between mb-6">
+    <h2 class="text-xl font-bold text-white">Configuración</h2>
+  </div>
+
+  <!-- L1 unavailable warning -->
+  <div x-show="!l1_available" x-cloak class="card mb-4 flex items-center gap-3 border-yellow-600">
+    <svg class="w-5 h-5 text-yellow-400 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
+    </svg>
+    <p class="text-yellow-300 text-sm">
+      Servicio de ingestion no disponible — los cambios no tendrán efecto hasta que esté activo.
+    </p>
+  </div>
+
+  <!-- Categories card -->
+  <div class="card max-w-xl">
+    <h3 class="text-base font-semibold text-white mb-1">Categorías de Interés</h3>
+    <p class="text-xs text-slate-400 mb-4">
+      L1 filtra mercados por estas categorías o tags. Los cambios se aplican en el siguiente ciclo de polling (~60s). El servicio <strong class="text-slate-300">no se reinicia</strong>.
+    </p>
+
+    <!-- Chips -->
+    <div class="flex flex-wrap gap-2 mb-4 min-h-8">
+      <template x-for="(cat, idx) in categories" :key="cat">
+        <span class="inline-flex items-center gap-1 bg-indigo-900 text-indigo-200 text-xs font-medium px-2.5 py-1 rounded-full">
+          <span x-text="cat"></span>
+          <button @click="remove(idx)" class="text-indigo-400 hover:text-white ml-1 leading-none" title="Eliminar">×</button>
+        </span>
+      </template>
+      <span x-show="categories.length === 0" class="text-slate-500 text-sm italic">Sin categorías configuradas</span>
+    </div>
+
+    <!-- Add input -->
+    <div class="flex gap-2 mb-5">
+      <input
+        x-model="new_cat"
+        @keyup.enter="add()"
+        class="input flex-1"
+        placeholder="Nueva categoría (ej: Sports, Crypto…)"
+      />
+      <button @click="add()" class="btn btn-ghost">+ Añadir</button>
+    </div>
+
+    <!-- Save button + feedback -->
+    <div class="flex items-center gap-3">
+      <button @click="save()" :disabled="saving" class="btn btn-primary">
+        <span x-show="!saving">Guardar cambios</span>
+        <span x-show="saving" x-cloak>Guardando…</span>
+      </button>
+      <span x-show="msg" x-cloak :class="msg_ok ? 'text-emerald-400' : 'text-red-400'" class="text-sm" x-text="msg"></span>
+    </div>
+  </div>
+
+</div>
+
+<script>
+function settingsPage() {
+  return {
+    categories: [],
+    new_cat: '',
+    l1_available: true,
+    saving: false,
+    msg: '',
+    msg_ok: true,
+
+    async load() {
+      const r = await fetch('/api/config/categories');
+      const d = await r.json();
+      this.categories = d.categories || [];
+      this.l1_available = d.l1_available !== false;
+    },
+
+    add() {
+      const v = this.new_cat.trim();
+      if (!v) return;
+      if (!this.categories.includes(v)) {
+        this.categories.push(v);
+      }
+      this.new_cat = '';
+    },
+
+    remove(idx) {
+      this.categories.splice(idx, 1);
+    },
+
+    async save() {
+      this.saving = true;
+      this.msg = '';
+      try {
+        const r = await fetch('/api/config/categories', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ categories: this.categories }),
+        });
+        const d = await r.json();
+        if (d.ok) {
+          this.categories = d.categories || this.categories;
+          this.msg = '✓ Categorías actualizadas';
+          this.msg_ok = true;
+        } else {
+          this.msg = d.error || 'Error al guardar';
+          this.msg_ok = false;
+        }
+      } catch (e) {
+        this.msg = 'Error de red';
+        this.msg_ok = false;
+      } finally {
+        this.saving = false;
+        setTimeout(() => this.msg = '', 4000);
+      }
+    },
+  }
+}
+</script>
+{% endblock %}
