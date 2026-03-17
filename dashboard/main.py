@@ -6,11 +6,15 @@ from fastapi.templating import Jinja2Templates
 from fastapi import Request
 from pathlib import Path
 
-from dashboard.routers import overview, markets, insiders, pipeline, trades, variables, sse, settings
+from dashboard.routers import overview, markets, insiders, pipeline, trades, variables, sse, settings, auth as auth_router
+from dashboard.auth import AuthMiddleware
 
 app = FastAPI(title="Insider Detection Dashboard", docs_url="/api/docs")
 
+app.add_middleware(AuthMiddleware)
+
 # ── Routers ──────────────────────────────────────────────────────────────────
+app.include_router(auth_router.router)
 app.include_router(overview.router)
 app.include_router(markets.router)
 app.include_router(insiders.router)
