@@ -30,7 +30,7 @@ def _celery_inspect_sync(redis_url: str) -> dict:
     try:
         from celery import Celery
         app = Celery(broker=redis_url, backend=redis_url)
-        i = app.control.inspect(timeout=2.0)
+        i = app.control.inspect(timeout=0.8)
         active = i.active() or {}
         scheduled = i.scheduled() or {}
         return {

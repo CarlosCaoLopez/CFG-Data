@@ -75,61 +75,111 @@
       outline: none;
     }
     .input:focus { box-shadow: 0 0 0 2px #6366f1; }
+
+    /* Sidebar transition */
+    #sidebar {
+      transition: transform 0.2s ease;
+    }
   </style>
 </head>
-<body class="bg-slate-900 text-slate-100 min-h-screen flex" x-data="dashboard()">
+<body class="bg-slate-900 text-slate-100 min-h-screen" x-data="dashboard()">
+
+  <!-- Mobile backdrop -->
+  <div x-show="sidebarOpen" x-cloak @click="sidebarOpen = false"
+       class="fixed inset-0 bg-black/60 z-20 md:hidden"></div>
+
+  <!-- Mobile top bar -->
+  <header class="md:hidden fixed top-0 left-0 right-0 z-30 bg-slate-800 border-b border-slate-700 px-4 h-12 flex items-center gap-3">
+    <button @click="sidebarOpen = !sidebarOpen"
+            class="text-slate-300 hover:text-white p-1 rounded-lg transition-colors">
+      <!-- Hamburger -->
+      <svg x-show="!sidebarOpen" class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/>
+      </svg>
+      <!-- X -->
+      <svg x-show="sidebarOpen" x-cloak class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+      </svg>
+    </button>
+    <div>
+      <p class="text-xs text-slate-400 font-medium uppercase tracking-widest leading-none">Polymarket</p>
+      <p class="text-sm font-bold text-white leading-tight">Insider Detection</p>
+    </div>
+  </header>
 
   <!-- Sidebar -->
-  <aside class="w-56 shrink-0 bg-slate-800 border-r border-slate-700 flex flex-col min-h-screen fixed top-0 left-0 z-10">
-    <div class="px-4 py-5 border-b border-slate-700">
-      <p class="text-xs text-slate-400 font-medium uppercase tracking-widest">Polymarket</p>
-      <h1 class="text-base font-bold text-white leading-tight">Insider Detection</h1>
+  <aside id="sidebar"
+         :class="sidebarOpen ? 'translate-x-0' : '-translate-x-full'"
+         class="fixed top-0 left-0 z-30 bg-slate-800 border-r border-slate-700 flex flex-col
+                w-full h-full md:w-56 md:min-h-screen">
+
+    <!-- Sidebar header -->
+    <div class="px-4 py-5 border-b border-slate-700 flex items-center justify-between shrink-0">
+      <div>
+        <p class="text-xs text-slate-400 font-medium uppercase tracking-widest">Polymarket</p>
+        <h1 class="text-base font-bold text-white leading-tight">Insider Detection</h1>
+      </div>
+      <!-- X button (desktop only, hamburger is in mobile top bar) -->
+      <button @click="sidebarOpen = false"
+              class="hidden md:flex items-center justify-center text-slate-400 hover:text-white p-1.5 rounded-lg hover:bg-slate-700 transition-colors">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+        </svg>
+      </button>
     </div>
 
-    <nav class="flex-1 p-3 space-y-1">
-      <a href="/"          class="sidebar-item {% if active == 'overview'  %}active{% endif %}">
+    <nav class="flex-1 p-3 space-y-1 overflow-y-auto">
+      <a href="/" @click="if(window.innerWidth < 768) sidebarOpen = false"
+         class="sidebar-item {% if active == 'overview'  %}active{% endif %}">
         <svg class="w-4 h-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"/></svg>
         Overview
       </a>
-      <a href="/markets"   class="sidebar-item {% if active == 'markets'   %}active{% endif %}">
+      <a href="/markets" @click="if(window.innerWidth < 768) sidebarOpen = false"
+         class="sidebar-item {% if active == 'markets'   %}active{% endif %}">
         <svg class="w-4 h-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>
         Markets
       </a>
-      <a href="/insiders"  class="sidebar-item {% if active == 'insiders'  %}active{% endif %}">
+      <a href="/insiders" @click="if(window.innerWidth < 768) sidebarOpen = false"
+         class="sidebar-item {% if active == 'insiders'  %}active{% endif %}">
         <svg class="w-4 h-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>
         Insiders
         <span x-show="kpis.total_insiders > 0" x-cloak class="ml-auto bg-red-600 text-white text-xs font-bold px-1.5 py-0.5 rounded-full" x-text="kpis.total_insiders"></span>
       </a>
-      <a href="/pipeline"  class="sidebar-item {% if active == 'pipeline'  %}active{% endif %}">
+      <a href="/pipeline" @click="if(window.innerWidth < 768) sidebarOpen = false"
+         class="sidebar-item {% if active == 'pipeline'  %}active{% endif %}">
         <svg class="w-4 h-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4"/></svg>
-        Pipeline
+        Flujo Redis
         <span x-show="pipeline_alert" x-cloak class="ml-auto w-2 h-2 rounded-full bg-yellow-400"></span>
       </a>
-      <a href="/trades"    class="sidebar-item {% if active == 'trades'    %}active{% endif %}">
+      <a href="/trades" @click="if(window.innerWidth < 768) sidebarOpen = false"
+         class="sidebar-item {% if active == 'trades'    %}active{% endif %}">
         <svg class="w-4 h-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16V4m0 0L3 8m4-4l4 4m6 0v12m0 0l4-4m-4 4l-4-4"/></svg>
         Trades
       </a>
-      <a href="/variables" class="sidebar-item {% if active == 'variables' %}active{% endif %}">
+      <a href="/variables" @click="if(window.innerWidth < 768) sidebarOpen = false"
+         class="sidebar-item {% if active == 'variables' %}active{% endif %}">
         <svg class="w-4 h-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 7h6m0 10v-3m-3 3h.01M9 17h.01M9 14h.01M12 14h.01M15 11h.01M12 11h.01M9 11h.01M7 21h10a2 2 0 002-2V5a2 2 0 00-2-2H7a2 2 0 00-2 2v14a2 2 0 002 2z"/></svg>
         Variables
         <span x-show="kpis.cmv_in_flight > 0" x-cloak class="ml-auto bg-yellow-600 text-white text-xs font-bold px-1.5 py-0.5 rounded-full" x-text="kpis.cmv_in_flight"></span>
       </a>
-      <a href="/settings" class="sidebar-item {% if active == 'settings' %}active{% endif %}">
+      <a href="/settings" @click="if(window.innerWidth < 768) sidebarOpen = false"
+         class="sidebar-item {% if active == 'settings' %}active{% endif %}">
         <svg class="w-4 h-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
         Configuración
       </a>
     </nav>
 
     <!-- Logout -->
-    <div class="px-3 pb-1">
-      <a href="/auth/logout" class="sidebar-item text-xs text-slate-500 hover:text-red-400">
+    <div class="px-3 pb-1 shrink-0">
+      <a href="/auth/logout" @click="if(window.innerWidth < 768) sidebarOpen = false"
+         class="sidebar-item text-xs text-slate-500 hover:text-red-400">
         <svg class="w-4 h-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"/></svg>
         Cerrar sesión
       </a>
     </div>
 
     <!-- SSE status + last update -->
-    <div class="p-3 border-t border-slate-700 space-y-2">
+    <div class="p-3 border-t border-slate-700 space-y-2 shrink-0">
       <div class="flex items-center gap-2">
         <span :class="sse_connected ? 'bg-emerald-400' : 'bg-red-400'" class="w-2 h-2 rounded-full shrink-0"></span>
         <span class="text-xs text-slate-400" x-text="sse_connected ? 'Live' : 'Reconectando...'"></span>
@@ -144,13 +194,27 @@
        x-text="toast_msg"></div>
 
   <!-- Main content -->
-  <main class="ml-56 flex-1 p-6 min-h-screen">
+  <main :class="sidebarOpen ? 'md:ml-56' : 'md:ml-0'"
+        class="pt-16 md:pt-0 flex-1 px-6 pb-6 min-h-screen transition-all duration-200">
+
+    <!-- Desktop top bar (hamburger when sidebar closed) -->
+    <div class="hidden md:flex items-center h-10 mb-4 mt-4">
+      <button x-show="!sidebarOpen" x-cloak @click="sidebarOpen = true"
+              class="flex items-center justify-center bg-slate-800 border border-slate-700
+                     text-slate-300 hover:text-white p-2 rounded-lg transition-colors hover:bg-slate-700">
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/>
+        </svg>
+      </button>
+    </div>
+
     {% block content %}{% endblock %}
   </main>
 
 <script>
 function dashboard() {
   return {
+    sidebarOpen: true,
     kpis: { total_wallets: 0, total_insiders: 0, total_markets: 0, closed_markets: 0, total_trades: 0, insider_trades: 0, cmv_in_flight: 0, detections_last_24h: 0 },
     stream_lengths: {},
     pipeline_alert: false,
@@ -160,6 +224,8 @@ function dashboard() {
     _toast_timer: null,
 
     init() {
+      // Desktop: open by default; mobile: closed by default
+      this.sidebarOpen = window.innerWidth >= 768;
       this.connectSSE();
     },
 

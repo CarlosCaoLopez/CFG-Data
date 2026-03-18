@@ -164,7 +164,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    command: uvicorn dashboard.main:app --host 0.0.0.0 --port 8000
+    command: uvicorn dashboard.main:app --host 0.0.0.0 --port 8000 --reload
     env_file: .env
     environment:
       - REDIS_URL=redis://redis:6379/0
@@ -179,6 +179,8 @@ services:
         condition: service_healthy
     networks:
       - proyect_net
+    volumes:
+      - ./dashboard:/app/dashboard
 
 volumes:
   redis_data:

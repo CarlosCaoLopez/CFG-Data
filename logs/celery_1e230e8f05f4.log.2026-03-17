@@ -1,0 +1,8 @@
+[2026-03-17 18:39:07,171] INFO - ForkPoolWorker-7 - [1e230e8f05f4] - Iniciando cleanup_stale_trades
+[2026-03-17 18:39:09,291] INFO - ForkPoolWorker-7 - [1e230e8f05f4] - TAREA COMPLETADA: workers.tasks.cleanup_stale_trades | RESULTADO: {'success': True, 'task': 'cleanup_stale_trades', 'processing_time_ms': 2107}
+[2026-03-17 18:44:49,571] INFO - ForkPoolWorker-7 - [1e230e8f05f4] - TAREA COMPLETADA: workers.tasks.compute_variables | RESULTADO: {'market_id': '0xcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd', 'success': True, 'rows_inserted': 1, 'processing_time_ms': 20}
+[2026-03-17 18:44:52,829] INFO - ForkPoolWorker-7 - [1e230e8f05f4] - T4: cleanup_market starting for market_id=0xcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd
+[2026-03-17 18:44:52,835] INFO - ForkPoolWorker-7 - [1e230e8f05f4] - T4: cleanup_market done for market_id=0xcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd cmv_rows=0 trade_rows=102 time=5ms
+[2026-03-17 18:44:52,836] INFO - ForkPoolWorker-7 - [1e230e8f05f4] - TAREA COMPLETADA: workers.tasks.cleanup_market | RESULTADO: {'success': True, 'task': 'cleanup_market', 'market_id': '0xcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd', 'cmv_rows_deleted': 0, 'trade_rows_deleted': 102, 'processing_time_ms': 5}
+[2026-03-17 19:39:04,556] INFO - ForkPoolWorker-7 - [1e230e8f05f4] - Iniciando cleanup_stale_trades
+[2026-03-17 19:39:04,684] INFO - ForkPoolWorker-7 - [1e230e8f05f4] - TAREA COMPLETADA: workers.tasks.cleanup_stale_trades | RESULTADO: {'success': True, 'task': 'cleanup_stale_trades', 'processing_time_ms': 101}
