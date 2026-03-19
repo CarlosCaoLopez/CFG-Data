@@ -1,25 +1,26 @@
 # Dockerfile.inference — Motor de Cálculo D (R + Plumber)
-# Based on rocker/r-ver for reproducible R version pinning.
-# NOTE: first build is slow (~5 min) due to package compilation.
+# Uses rocker/tidyverse (dplyr, httr, jsonlite pre-installed) + Posit Package Manager
+# for pre-compiled Linux binaries — avoids source compilation on every build.
 
-FROM rocker/r-ver:4.4
+FROM rocker/tidyverse:4.4
 
 # System dependencies required by RPostgres and fitdistrplus
 RUN apt-get update && apt-get install -y \
     libpq-dev \
-    libssl-dev \
-    libcurl4-openssl-dev \
     libsodium-dev \
-    zlib1g-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Install R packages (cached layer — only rebuilds if this line changes)
+# Install remaining packages.
+# On x86_64: Posit Package Manager serves pre-compiled binaries (fast).
+# On ARM64 (e.g. Raspberry Pi): falls back to CRAN source compilation automatically.
 RUN R -e " \
-  install.packages( \
-    c('plumber', 'RPostgres', 'dplyr', 'fitdistrplus', 'MASS', 'httr', 'jsonlite'), \
-    repos  = 'https://cloud.r-project.org', \
-    Ncpus  = 4 \
-  ) \
+  arch <- Sys.info()[['machine']]; \
+  repo <- if (arch == 'x86_64') \
+    'https://packagemanager.posit.co/cran/__linux__/noble/latest' \
+  else \
+    'https://cloud.r-project.org'; \
+  options(repos = c(REPO = repo)); \
+  install.packages(c('plumber', 'RPostgres', 'fitdistrplus', 'MASS'), Ncpus = 4) \
 "
 
 WORKDIR /app

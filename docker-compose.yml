@@ -31,6 +31,20 @@ services:
       timeout: 3s
       retries: 5
 
+  migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: alembic upgrade head
+    env_file: .env
+    environment:
+      - DATABASE_URL=postgresql://insider:insider_pass@postgres:5432/insider_detection
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - proyect_net
+
   ingestion:
     build:
       context: .
