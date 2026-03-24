@@ -114,6 +114,7 @@ def compute_variables(self, market_id: str) -> dict:
                 text(sql_text),
                 {"market_id": market_id}
             )
+            session.commit()
             rows_affected = result.rowcount
 
         processing_time_ms = int((time.time() - start_time) * 1000)

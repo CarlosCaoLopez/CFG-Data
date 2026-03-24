@@ -6,7 +6,8 @@ from sqlalchemy.ext.asyncio import create_async_engine
 
 from alembic import context
 
-from database.models import Base
+from database.base import Base
+from database.models.closed_market_variables import ClosedMarketVariables
 from database.connection import DATABASE_URL_ASYNC as DATABASE_URL
 
 config = context.config

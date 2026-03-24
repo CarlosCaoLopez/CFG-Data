@@ -32,4 +32,4 @@ class Trade(Base):
     # Relaciones
     wallet_rel: Mapped["Wallet"] = relationship(back_populates="trades")
     market_rel: Mapped["Market"] = relationship(back_populates="trades")
-    closed_market_vars: Mapped[List["ClosedMarketVariables"]] = relationship(back_populates="trade_rel")
+    # closed_market_vars: Mapped[List["ClosedMarketVariables"]] = relationship(back_populates="trade_rel")

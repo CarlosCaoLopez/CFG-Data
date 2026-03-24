@@ -16,7 +16,7 @@ class ClosedMarketVariables(Base):
     # Composite primary key
     wallet_id: Mapped[str] = mapped_column(String(42), ForeignKey("wallets.address"), primary_key=True)
     market_id: Mapped[str] = mapped_column(String(66), ForeignKey("markets.market_id"), primary_key=True)
-    trade_id: Mapped[str] = mapped_column(String(66), ForeignKey("trades.id"), primary_key=True)
+    # trade_id: Mapped[str] = mapped_column(String(66), ForeignKey("trades.id"), primary_key=True)
 
     # Calculated variables for insider detection
     delta_t: Mapped[Decimal] = mapped_column(Numeric) # Time difference in hours
@@ -28,4 +28,4 @@ class ClosedMarketVariables(Base):
     # Relaciones
     wallet_rel: Mapped["Wallet"] = relationship(back_populates="closed_market_vars")
     market_rel: Mapped["Market"] = relationship(back_populates="closed_market_vars")
-    trade_rel: Mapped["Trade"] = relationship(back_populates="closed_market_vars")
+    # trade_rel: Mapped["Trade"] = relationship(back_populates="closed_market_vars")

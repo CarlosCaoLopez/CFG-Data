@@ -166,6 +166,7 @@ def test_wallet_score_with_category():
         component_a=50.0,
         component_b=40.0,
         component_c=35.5,
+        component_d=10.0,
         delta_elo=15.0,
         volume_usdc=5000.0,
         won=True,

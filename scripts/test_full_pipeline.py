@@ -21,7 +21,8 @@ Requires all services running:
 Run:
   poetry run python -m scripts.test_full_pipeline
 """
-
+import os
+import redis
 import json
 import random
 import sys
@@ -49,8 +50,9 @@ from workers.tasks import compute_variables, run_market_inference, cleanup_stale
 # ─────────────────────────────────────────────
 # Constants
 # ─────────────────────────────────────────────
-
-REDIS_URL = "redis://localhost:6379/0"
+REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+redis_client = redis.from_url(REDIS_URL)
+#REDIS_URL = "redis://localhost:6379/0"
 
 # IDs must match DB column widths (String(66) for markets/trades, String(42) for wallets)
 TEST_WALLET    = "0x" + "ab" * 20         # 42 chars

@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 
 import pytest
 import pytest_asyncio
+import os
 import redis
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import text
@@ -74,7 +75,8 @@ async def seed_market(db_session):
 
 @pytest.fixture
 def redis_client():
-    client = redis.from_url("redis://localhost:6379/0")
+    REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+    client = redis.from_url(REDIS_URL)
     yield client
     client.close()
 
