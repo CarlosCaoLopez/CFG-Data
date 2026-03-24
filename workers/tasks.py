@@ -110,11 +110,13 @@ def compute_variables(self, market_id: str) -> dict:
 
     try:
         with get_sync_session() as session:
-            result = session.execute(
-                text(sql_text),
+            # Use exec_driver_sql to handle complex CTEs with PostgreSQL driver directly
+            # text() + session.execute() has issues with complex CTEs and INSERT statements
+            connection = session.connection()
+            result = connection.exec_driver_sql(
+                sql_text,
                 {"market_id": market_id}
             )
-            session.commit()
             rows_affected = result.rowcount
 
         processing_time_ms = int((time.time() - start_time) * 1000)
@@ -148,7 +150,9 @@ def cleanup_stale_trades(self) -> dict:
 
     try:
         with get_sync_session() as session:
-            session.execute(text(sql_text))
+            # Use exec_driver_sql to handle PL/pgSQL blocks (DO $$ $$) directly
+            connection = session.connection()
+            connection.exec_driver_sql(sql_text)
 
         processing_time_ms = int((time.time() - start_time) * 1000)
 

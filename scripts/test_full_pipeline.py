@@ -45,7 +45,7 @@ from contracts.raw_market_data import (
     RawWalletAge,
 )
 from database.connection import get_sync_session
-from workers.tasks import compute_variables, run_market_inference, cleanup_stale_trades
+from workers.tasks import compute_variables, run_market_inference, cleanup_market
 
 # ─────────────────────────────────────────────
 # Constants
@@ -80,8 +80,8 @@ CMV_BG_COUNT = 100
 # Phase 6d: unique trade ID for the insider_trades → T1 → insiders_trades path
 INSIDER_TEST_TRADE_ID = "0x" + "c" * 64   # 66 chars
 
-# Phase 6: REST API (E) — exposed on host port 8001 via docker-compose
-API_URL = "http://localhost:8001"
+# Phase 6: REST API (E) — exposed on host port 8000 via docker-compose
+API_URL = "http://api:8000"
 
 # ─────────────────────────────────────────────
 # Helpers
@@ -298,13 +298,13 @@ def seed_cmv_for_inference(session) -> None:
         session.execute(
             text("""
                 INSERT INTO closed_market_variables
-                    (wallet_id, market_id, trade_id,
+                    (wallet_id, market_id,
                      delta_t, age, winning_volume, alpha_slippage, entropy)
-                VALUES (:wid, :mid, :tid, :dt, :age, :wv, :slip, :ent)
+                VALUES (:wid, :mid, :dt, :age, :wv, :slip, :ent)
                 ON CONFLICT DO NOTHING
             """),
             {
-                "wid": addr, "mid": TEST_MARKET_ID, "tid": tid,
+                "wid": addr, "mid": TEST_MARKET_ID,
                 "dt": round(dt, 6), "age": round(age, 4),
                 "wv": round(wv, 2), "slip": round(slip, 6), "ent": round(ent, 6),
             },
@@ -569,7 +569,7 @@ def run_tests() -> int:
             # Verify rows in closed_market_variables
             with get_sync_session() as session:
                 rows = session.execute(
-                    text("SELECT wallet_id, trade_id, delta_t, age, winning_volume "
+                    text("SELECT wallet_id, delta_t, age, winning_volume "
                          "FROM closed_market_variables WHERE market_id = :mid"),
                     {"mid": TEST_MARKET_ID},
                 ).fetchall()
@@ -871,7 +871,7 @@ def run_tests() -> int:
     section("PHASE 7 — T4 (cleanup_stale_trades)")
 
     print(f"{INFO} Dispatching cleanup_stale_trades.delay()")
-    t4_result = cleanup_stale_trades.delay()
+    t4_result = cleanup_market.delay(TEST_MARKET_ID)
     print(f"{INFO} Task id: {t4_result.id}")
 
     deadline = time.time() + T4_TIMEOUT
@@ -884,8 +884,8 @@ def run_tests() -> int:
     t4_data    = t4_result.result if t4_done else None
 
     check("T4: cleanup_stale_trades task completed", t4_done)
-    check("T4: cleanup_stale_trades task succeeded (no exception)", t4_success,
-          f"result={t4_data}" if t4_done else "timed out")
+    detail_msg = f"result={t4_data}" if t4_success else f"status={t4_result.state} | err={t4_data}"
+    check("T4: cleanup_market task succeeded", t4_success, detail_msg)
 
     # ── TEARDOWN ──────────────────────────────────────────────────────
     section("TEARDOWN — remove test data")

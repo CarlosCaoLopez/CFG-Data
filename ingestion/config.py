@@ -4,7 +4,7 @@
 from pydantic_settings import BaseSettings
 from pydantic import Field, computed_field
 from functools import lru_cache
-
+import os
 
 class IngestionSettings(BaseSettings):
     """Main ingestion settings - loads from .env file"""
@@ -28,7 +28,7 @@ class IngestionSettings(BaseSettings):
     # Redis
     # ===================
     redis_url: str = Field(
-        default="redis://localhost:6379/0",
+        default=os.getenv("REDIS_URL", "redis://redis:6379/0"),
         alias="REDIS_URL"
     )
 

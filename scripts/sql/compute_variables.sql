@@ -27,7 +27,7 @@ trade_data AS (
     FROM trades t
     JOIN markets m ON m.market_id = t.market_id
     LEFT JOIN wallets w ON w.address = t.wallet_id
-    WHERE t.market_id = :market_id
+    WHERE t.market_id = %(market_id)s
 ),
 
 -- 2. Agrupación base por wallet para este market
@@ -108,7 +108,6 @@ SELECT
     COALESCE(we.entropy, 0) AS entropy
 FROM wallet_market_stats wms
 LEFT JOIN wallet_entropy we ON we.wallet_id = wms.wallet_id
-
 ON CONFLICT (wallet_id, market_id) DO UPDATE SET
     delta_t        = EXCLUDED.delta_t,
     age            = EXCLUDED.age,

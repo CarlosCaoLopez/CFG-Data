@@ -5,22 +5,17 @@
 
 DO $$
 DECLARE
-    cmv_count INT;
     trade_count INT;
     now_ts TEXT := TO_CHAR(NOW(), 'YYYY-MM-DD HH24:MI:SS');
 BEGIN
     -- Contar registros antes de eliminar
-    SELECT COUNT(*) INTO cmv_count
-    FROM closed_market_variables
-    WHERE market_id = :market_id;
-
     SELECT COUNT(*) INTO trade_count
     FROM trades
     WHERE market_id = :market_id;
 
-    RAISE NOTICE '[CLEANUP_MARKET %] market_id=% | cmv a eliminar: % | trades a eliminar: %', now_ts, :market_id, cmv_count, trade_count;
+    RAISE NOTICE '[CLEANUP_MARKET %] market_id=% | trades a eliminar: %', now_ts, :market_id, trade_count;
 
-    -- Eliminar closed_market_variables PRIMERO (FK constraint: cmv.trade_id -> trades.id)
+    -- Eliminar closed_market_variables
     DELETE FROM closed_market_variables
     WHERE market_id = :market_id;
 

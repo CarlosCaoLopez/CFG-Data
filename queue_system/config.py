@@ -1,3 +1,5 @@
+import os
+
 from pydantic_settings import BaseSettings
 from pydantic import ConfigDict
 
@@ -6,7 +8,7 @@ from pydantic import ConfigDict
 class QueueConfig(BaseSettings):
     model_config = ConfigDict(extra='allow')
 
-    redis_url: str = "redis://localhost:6379/0"
+    redis_url: str = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 
     # Streams (A → B)
     raw_data_stream_name: str = "raw_data"
