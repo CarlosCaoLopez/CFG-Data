@@ -191,7 +191,7 @@ async def verify_results():
     """Lee closed_market_variables y valida los resultados."""
     async with async_session() as session:
         rows = (await session.execute(text(
-            "SELECT wallet_id, trade_id, delta_t, age, winning_volume, alpha_slippage, entropy "
+            "SELECT wallet_id, delta_t, age, winning_volume, alpha_slippage, entropy "
             "FROM closed_market_variables "
             "WHERE market_id = :mid "
             "ORDER BY wallet_id, trade_id"

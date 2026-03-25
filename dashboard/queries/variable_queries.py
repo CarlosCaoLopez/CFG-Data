@@ -23,7 +23,7 @@ async def get_variables_detail(
 ) -> dict:
     offset = (page - 1) * limit
     rows = (await session.execute(text("""
-        SELECT wallet_id, trade_id, delta_t, age, winning_volume, alpha_slippage, entropy
+        SELECT wallet_id, delta_t, age, winning_volume, alpha_slippage, entropy
         FROM closed_market_variables
         WHERE market_id = :mid
         ORDER BY delta_t ASC

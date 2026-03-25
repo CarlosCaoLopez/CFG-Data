@@ -376,7 +376,7 @@ class QueueOrchestrator:
         FK order: wallets first → market → trades (respects FK constraints).
         Trades are inserted as a single batch statement (ON CONFLICT DO NOTHING).
         """
-        from celery import current_app as celery_app
+        from workers.celery_app import app as celery_app
 
         async with async_session() as session:
             db = DatabaseManager(session)
@@ -393,6 +393,8 @@ class QueueOrchestrator:
                 await db.upsert_trade_batch(
                     [self._trade_to_dict(t) for t in batch.trades]
                 )
+
+            await session.commit()
 
         self.logger.info(
             "t1_persisted",
@@ -439,6 +441,7 @@ class QueueOrchestrator:
                 await db.upsert_insider_trade_batch(
                     [self._trade_to_dict(t) for t in data.trades]
                 )
+                await session.commit()
 
         self.logger.info(
             "t1_insider_persisted",

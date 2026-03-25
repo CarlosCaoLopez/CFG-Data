@@ -870,7 +870,7 @@ def run_tests() -> int:
     # ── PHASE 7: T4 — cleanup_stale_trades ────────────────────────────
     section("PHASE 7 — T4 (cleanup_stale_trades)")
 
-    print(f"{INFO} Dispatching cleanup_stale_trades.delay()")
+    print(f"{INFO} Dispatching cleanup_market.delay()")
     t4_result = cleanup_market.delay(TEST_MARKET_ID)
     print(f"{INFO} Task id: {t4_result.id}")
 
@@ -883,7 +883,7 @@ def run_tests() -> int:
     t4_success = t4_done and t4_result.successful()
     t4_data    = t4_result.result if t4_done else None
 
-    check("T4: cleanup_stale_trades task completed", t4_done)
+    check("T4: cleanup_market task completed", t4_done)
     detail_msg = f"result={t4_data}" if t4_success else f"status={t4_result.state} | err={t4_data}"
     check("T4: cleanup_market task succeeded", t4_success, detail_msg)
 

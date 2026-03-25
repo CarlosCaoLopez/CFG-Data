@@ -79,7 +79,9 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    command: python -m queue_system
+    command: >
+      sh -c "poetry run alembic upgrade head &&
+            python -m queue_system"
     env_file: .env
     environment:
       - REDIS_URL=redis://redis:6379/0
