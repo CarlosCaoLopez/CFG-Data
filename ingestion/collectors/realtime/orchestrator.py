@@ -84,7 +84,9 @@ class RealtimeOrchestrator:
 
         # Market metadata enrichment
         self._markets_collector = MarketsCollector()
-        self._normalizer = DataNormalizer()
+        self._normalizer = DataNormalizer(
+            categorias_de_interes=self.settings.categorias_de_interes,
+        )
         self._market_cache: dict[str, RawMarketMetadata] = {}
         self._cache_misses: set[str] = set()  # Token IDs not found in API
 

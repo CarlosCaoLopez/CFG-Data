@@ -53,7 +53,9 @@ class BackfillRunner:
         self.markets_collector = MarketsCollector()
         self.trades_collector = TradesCollector()
         self.wallet_age_collector = WalletAgeCollector()
-        self.normalizer = DataNormalizer()
+        self.normalizer = DataNormalizer(
+            categorias_de_interes=self.settings.categorias_de_interes,
+        )
 
         self.checkpoint_file = Path(self.settings.checkpoint_file)
         self.processed_markets: set[str] = set()

@@ -25,6 +25,12 @@ class DataNormalizer:
     - Wallet age data → RawWalletAge
     """
 
+    def __init__(self, categorias_de_interes: list[str] | None = None):
+        # Lowercased set for matching tags → derived category
+        self._interests: set[str] | None = None
+        if categorias_de_interes:
+            self._interests = set(s.lower() for s in categorias_de_interes)
+
     def normalize_market(self, raw: dict[str, Any]) -> RawMarketMetadata:
         """
         Convert raw Gamma API market response to RawMarketMetadata.
@@ -46,11 +52,32 @@ class DataNormalizer:
         # Parse volume (may be string or number)
         volume = float(raw.get("volume") or 0)
 
-        # Extract category (direct field from market)
+        # Extract category: try singular, then plural array, then derive from tags
         category = raw.get("category")
+
+        if not category:
+            # Try categories (plural) — array of {label, slug} objects
+            raw_categories = raw.get("categories")
+            if raw_categories and isinstance(raw_categories, list):
+                for cat in raw_categories:
+                    if isinstance(cat, dict):
+                        label = cat.get("label") or cat.get("slug")
+                        if label:
+                            category = label
+                            break
+                    elif isinstance(cat, str) and cat:
+                        category = cat
+                        break
 
         # Extract tags from nested events array
         tags = self._extract_tags_from_events(raw.get("events"))
+
+        # Fallback: derive category from tags matching CATEGORIAS_DE_INTERES
+        if not category and tags and self._interests:
+            for tag in tags:
+                if tag.lower() in self._interests:
+                    category = tag
+                    break
 
         return RawMarketMetadata(
             market_id=raw["conditionId"],

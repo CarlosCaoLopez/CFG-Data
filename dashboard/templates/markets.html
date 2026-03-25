@@ -27,6 +27,7 @@
         <tr>
           <th>Pregunta</th>
           <th>Categorías</th>
+          <th>Tags</th>
           <th>Volumen</th>
           <th>Trades</th>
           <th>Insiders</th>
@@ -46,6 +47,11 @@
                 <template x-for="cat in (m.categories || [])"><span class="badge-blue" x-text="cat"></span></template>
               </div>
             </td>
+            <td>
+              <div class="flex flex-wrap gap-1">
+                <template x-for="tag in (m.tags || [])"><span class="badge-slate" x-text="tag"></span></template>
+              </div>
+            </td>
             <td class="text-right font-mono" x-text="fmtUSD(m.volume_usdc)"></td>
             <td class="text-right" x-text="m.trades_count"></td>
             <td class="text-right">
@@ -58,7 +64,7 @@
           </tr>
         </template>
         <tr x-show="!items.length">
-          <td colspan="7" class="text-center text-slate-500 py-8">Sin datos</td>
+          <td colspan="8" class="text-center text-slate-500 py-8">Sin datos</td>
         </tr>
       </tbody>
     </table>

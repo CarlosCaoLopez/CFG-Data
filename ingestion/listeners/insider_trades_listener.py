@@ -58,7 +58,9 @@ class InsiderTradesListener:
         self.publisher = publisher or RedisPublisher()
         self.trades_collector = trades_collector or TradesCollector()
         self.markets_collector = markets_collector or MarketsCollector()
-        self.normalizer = normalizer or DataNormalizer()
+        self.normalizer = normalizer or DataNormalizer(
+            categorias_de_interes=self.settings.categorias_de_interes,
+        )
         self.logger = logger.bind(component="l2_insider_trades")
 
         # Monitored wallets: wallet_address → MonitoredWallet
