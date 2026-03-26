@@ -59,7 +59,7 @@
           </tr>
         </thead>
         <tbody>
-          <template x-for="v in detail" :key="v.trade_id">
+          <template x-for="v in detail" :key="v.wallet_id">
             <tr>
               <td class="font-mono text-xs text-indigo-400" x-text="v.wallet_id?.slice(0,10)+'…'"></td>
               <td class="text-right font-mono text-xs" x-text="parseFloat(v.delta_t ?? 0).toFixed(2)"></td>
