@@ -37,7 +37,7 @@
       </thead>
       <tbody>
         <template x-for="m in items" :key="m.market_id">
-          <tr class="cursor-pointer hover:bg-slate-750" @click="window.location='/markets?detail=' + m.market_id">
+          <tr class="cursor-pointer hover:bg-slate-750" @click="window.location='/markets/' + m.market_id">
             <td class="max-w-xs">
               <p class="text-slate-200 text-sm line-clamp-2" x-text="m.question"></p>
               <p class="text-xs font-mono text-slate-500 mt-0.5" x-text="m.market_id.slice(0,18) + '…'"></p>

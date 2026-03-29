@@ -1,0 +1,150 @@
+{% extends "base.html" %}
+{% block title %}Market Detail{% endblock %}
+{% block content %}
+<div x-data="marketDetailPage()" x-init="load()">
+
+  <!-- Header -->
+  <div class="flex items-center gap-4 mb-6">
+    <a href="/markets" class="btn-ghost text-sm">← Volver</a>
+    <h2 class="text-xl font-bold text-white flex-1" x-text="market ? market.question : 'Cargando…'"></h2>
+    <button @click="load()" class="btn-ghost text-xs">↻ Actualizar</button>
+  </div>
+
+  <!-- Market info card -->
+  <template x-if="market">
+    <div class="card mb-6 flex flex-wrap gap-x-8 gap-y-3 text-sm">
+      <div>
+        <span class="text-slate-500 text-xs uppercase tracking-wide">Estado</span>
+        <div class="mt-1">
+          <span :class="market.closed ? 'badge-green' : 'badge-yellow'" x-text="market.closed ? 'Cerrado' : 'Abierto'"></span>
+        </div>
+      </div>
+      <div>
+        <span class="text-slate-500 text-xs uppercase tracking-wide">Volumen</span>
+        <div class="mt-1 font-mono text-slate-200" x-text="fmtUSD(market.volume_usdc)"></div>
+      </div>
+      <div>
+        <span class="text-slate-500 text-xs uppercase tracking-wide">Trades</span>
+        <div class="mt-1 text-slate-200" x-text="market.trades_count"></div>
+      </div>
+      <div>
+        <span class="text-slate-500 text-xs uppercase tracking-wide">Insiders</span>
+        <div class="mt-1">
+          <span :class="market.insiders_count > 0 ? 'badge-red' : 'text-slate-500'" x-text="market.insiders_count > 0 ? market.insiders_count : '—'"></span>
+        </div>
+      </div>
+      <div>
+        <span class="text-slate-500 text-xs uppercase tracking-wide">Cierre</span>
+        <div class="mt-1 text-slate-400 text-xs" x-text="fmtDateFull(market.end_date)"></div>
+      </div>
+      <div x-show="(market.categories || []).length">
+        <span class="text-slate-500 text-xs uppercase tracking-wide">Categorías</span>
+        <div class="mt-1 flex flex-wrap gap-1">
+          <template x-for="cat in (market.categories || [])"><span class="badge-blue" x-text="cat"></span></template>
+        </div>
+      </div>
+      <div x-show="(market.tags || []).length">
+        <span class="text-slate-500 text-xs uppercase tracking-wide">Tags</span>
+        <div class="mt-1 flex flex-wrap gap-1">
+          <template x-for="tag in (market.tags || [])"><span class="badge-slate" x-text="tag"></span></template>
+        </div>
+      </div>
+      <div class="w-full">
+        <span class="text-slate-500 text-xs uppercase tracking-wide">Market ID</span>
+        <div class="mt-1 font-mono text-xs text-slate-500" x-text="market.market_id"></div>
+      </div>
+    </div>
+  </template>
+
+  <!-- Trades filters -->
+  <div class="card mb-4 flex flex-wrap gap-3 items-center">
+    <select x-model="filter_side" @change="page=1; loadTrades()" class="input">
+      <option value="">Lado (todos)</option>
+      <option value="BUY">BUY</option>
+      <option value="SELL">SELL</option>
+    </select>
+    <input x-model="filter_wallet" @keyup.enter="page=1; loadTrades()" class="input w-48" placeholder="Wallet 0x…"/>
+    <button @click="page=1; loadTrades()" class="btn-primary">Filtrar</button>
+    <span class="text-xs text-slate-500 ml-auto" x-text="total + ' trades'"></span>
+  </div>
+
+  <!-- Trades table -->
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Wallet</th>
+          <th>Timestamp</th>
+          <th>Side</th>
+          <th>Outcome</th>
+          <th>Price</th>
+          <th class="text-right">USDC</th>
+          <th>Fuente</th>
+          <th>Last</th>
+        </tr>
+      </thead>
+      <tbody>
+        <template x-for="t in trades" :key="t.id">
+          <tr>
+            <td class="font-mono text-xs text-indigo-400" x-text="t.wallet_id?.slice(0,10)+'…'" :title="t.wallet_id"></td>
+            <td class="text-xs font-mono text-slate-400" x-text="fmtDate(t.timestamp)"></td>
+            <td><span :class="t.side === 'BUY' ? 'badge-green' : 'badge-red'" x-text="t.side"></span></td>
+            <td class="text-xs" x-text="t.outcome"></td>
+            <td class="font-mono text-xs" x-text="parseFloat(t.prize || 0).toFixed(3)"></td>
+            <td class="font-mono text-xs text-right" x-text="fmtUSD(t.size_usdc)"></td>
+            <td><span :class="t.source === 'insider' ? 'badge-red' : 'badge-blue'" x-text="t.source"></span></td>
+            <td><span x-show="t.last_trade" class="badge-yellow">✓</span></td>
+          </tr>
+        </template>
+        <tr x-show="!trades.length">
+          <td colspan="8" class="text-center text-slate-500 py-8">Sin trades</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- Pagination -->
+  <div class="flex justify-between items-center mt-4">
+    <button @click="prevPage()" :disabled="page === 1" class="btn-ghost disabled:opacity-40">← Anterior</button>
+    <span class="text-xs text-slate-400" x-text="'Página ' + page + ' · ' + total + ' resultados'"></span>
+    <button @click="nextPage()" :disabled="page * limit >= total" class="btn-ghost disabled:opacity-40">Siguiente →</button>
+  </div>
+
+</div>
+
+<script>
+function marketDetailPage() {
+  const marketId = {{ market_id | tojson }};
+  return {
+    market: null,
+    trades: [], total: 0, page: 1, limit: 100,
+    filter_side: '', filter_wallet: '',
+
+    async load() {
+      await Promise.all([this.loadMarket(), this.loadTrades()]);
+    },
+
+    async loadMarket() {
+      const r = await fetch('/api/markets/' + encodeURIComponent(marketId));
+      if (!r.ok) return;
+      this.market = await r.json();
+    },
+
+    async loadTrades() {
+      const p = new URLSearchParams({ page: this.page, limit: this.limit, market_id: marketId, table: 'all' });
+      if (this.filter_side) p.set('side', this.filter_side);
+      if (this.filter_wallet) p.set('wallet', this.filter_wallet);
+      const r = await fetch('/api/trades?' + p);
+      const d = await r.json();
+      this.trades = d.items; this.total = d.total;
+    },
+
+    nextPage() { this.page++; this.loadTrades(); },
+    prevPage() { if (this.page > 1) { this.page--; this.loadTrades(); } },
+    fmtUSD(n) { return '$' + parseFloat(n ?? 0).toLocaleString(undefined, {maximumFractionDigits: 2}); },
+    fmtDate(iso) { if (!iso) return '—'; return new Date(iso).toLocaleString(undefined, {month:'short', day:'numeric', hour:'2-digit', minute:'2-digit'}); },
+    fmtDateFull(iso) { if (!iso) return '—'; return new Date(iso).toLocaleString(undefined, {year:'numeric', month:'short', day:'numeric', hour:'2-digit', minute:'2-digit'}); },
+  }
+}
+</script>
+{% endblock %}

@@ -13,6 +13,10 @@ app = FastAPI(title="Insider Detection Dashboard", docs_url="/api/docs")
 
 app.add_middleware(AuthMiddleware)
 
+# ── Static files (logos, favicons) ───────────────────────────────────────────
+_public_dir = Path(__file__).parent.parent / "public"
+app.mount("/static", StaticFiles(directory=str(_public_dir)), name="static")
+
 # ── Routers ──────────────────────────────────────────────────────────────────
 app.include_router(auth_router.router)
 app.include_router(overview.router)
@@ -38,6 +42,11 @@ async def page_overview(request: Request):
 @app.get("/markets")
 async def page_markets(request: Request):
     return templates.TemplateResponse("markets.html", {"request": request, "active": "markets"})
+
+
+@app.get("/markets/{market_id}")
+async def page_market_detail(request: Request, market_id: str):
+    return templates.TemplateResponse("market_detail.html", {"request": request, "active": "markets", "market_id": market_id})
 
 
 @app.get("/insiders")

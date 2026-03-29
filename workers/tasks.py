@@ -1,4 +1,5 @@
 import os
+import csv
 import time
 import math
 from pathlib import Path
@@ -15,6 +16,40 @@ from database.connection import get_sync_session
 
 # Ruta al script SQL de compute_variables
 _SQL_DIR = Path(__file__).resolve().parent.parent / "scripts" / "sql"
+
+# CSV debug logs for CMV
+_LOGS_DIR = Path(__file__).resolve().parent.parent / "logs"
+_CMV_DIR = _LOGS_DIR / "cmv"
+
+
+def _cmv_inputs_path(market_id: str) -> Path:
+    return _CMV_DIR / f"cmv_inputs_{market_id}.csv"
+
+
+def _cmv_outputs_path(market_id: str) -> Path:
+    return _CMV_DIR / f"cmv_outputs_{market_id}.csv"
+
+_CMV_INPUT_HEADERS = [
+    "timestamp", "market_id", "wallet_id", "trade_timestamp", "outcome",
+    "prize", "size_usdc", "side", "end_date", "market_volume",
+    "winning_outcome", "first_seen_at",
+]
+_CMV_OUTPUT_HEADERS = [
+    "timestamp", "market_id", "wallet_id",
+    "delta_t", "age", "winning_volume", "alpha_slippage", "entropy",
+]
+
+
+def _append_csv(path: Path, headers: list[str], rows: list[list]):
+    """Append rows to a CSV file, writing headers if the file is new."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    write_header = not path.exists() or path.stat().st_size == 0
+    with open(path, "a", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        if write_header:
+            writer.writerow(headers)
+        writer.writerows(rows)
+
 
 # Logger for tasks
 logger = get_task_logger(__name__)
@@ -113,11 +148,59 @@ def compute_variables(self, market_id: str) -> dict:
             # Use exec_driver_sql to handle complex CTEs with PostgreSQL driver directly
             # text() + session.execute() has issues with complex CTEs and INSERT statements
             connection = session.connection()
+
+            # --- Log INPUTS: trades + wallet/market data that feed the SQL ---
+            now_str = datetime.utcnow().isoformat()
+            try:
+                input_rows_result = connection.exec_driver_sql(
+                    "SELECT t.wallet_id, t.timestamp, t.outcome, t.prize, "
+                    "       t.size_usdc, t.side, "
+                    "       m.end_date, m.volume_usdc, m.winning_outcome, "
+                    "       w.first_seen_at "
+                    "FROM trades t "
+                    "JOIN markets m ON m.market_id = t.market_id "
+                    "LEFT JOIN wallets w ON w.address = t.wallet_id "
+                    "WHERE t.market_id = %(market_id)s",
+                    {"market_id": market_id}
+                )
+                input_csv_rows = []
+                for r in input_rows_result:
+                    input_csv_rows.append([
+                        now_str, market_id,
+                        r[0], r[1], r[2], r[3], r[4], r[5],
+                        r[6], r[7], r[8], r[9],
+                    ])
+                if input_csv_rows:
+                    _append_csv(_cmv_inputs_path(market_id), _CMV_INPUT_HEADERS, input_csv_rows)
+                    logger.info(f"CMV debug: logged {len(input_csv_rows)} input rows for market={market_id}")
+            except Exception as log_err:
+                logger.warning(f"CMV debug: failed to log inputs for market={market_id}: {log_err}")
+
+            # --- Execute the actual computation ---
             result = connection.exec_driver_sql(
                 sql_text,
                 {"market_id": market_id}
             )
             rows_affected = result.rowcount
+
+            # --- Log OUTPUTS: computed CMV values ---
+            try:
+                output_rows_result = connection.exec_driver_sql(
+                    "SELECT wallet_id, delta_t, age, winning_volume, alpha_slippage, entropy "
+                    "FROM closed_market_variables WHERE market_id = %(market_id)s",
+                    {"market_id": market_id}
+                )
+                output_csv_rows = []
+                for r in output_rows_result:
+                    output_csv_rows.append([
+                        now_str, market_id,
+                        r[0], r[1], r[2], r[3], r[4], r[5],
+                    ])
+                if output_csv_rows:
+                    _append_csv(_cmv_outputs_path(market_id), _CMV_OUTPUT_HEADERS, output_csv_rows)
+                    logger.info(f"CMV debug: logged {len(output_csv_rows)} output rows for market={market_id}")
+            except Exception as log_err:
+                logger.warning(f"CMV debug: failed to log outputs for market={market_id}: {log_err}")
 
         processing_time_ms = int((time.time() - start_time) * 1000)
 

@@ -20,6 +20,7 @@ trade_data AS (
         t.outcome,
         t.prize,
         t.size_usdc,
+        t.side,
         m.end_date,
         m.volume_usdc AS market_volume,
         m.winning_outcome,
@@ -45,9 +46,12 @@ wallet_market_stats AS (
             1
         ) AS age,
 
-        -- winning_volume: suma de size * prize * (+1 o -1)
+        -- winning_volume: suma de size * prize * side_sign * outcome_sign
+        -- side_sign: BUY=+1, SELL=-1 (vender el perdedor = apostar al ganador)
         SUM(
-            size_usdc * prize * CASE WHEN outcome = winning_outcome THEN 1 ELSE -1 END
+            size_usdc * prize
+            * CASE WHEN side = 'BUY' THEN 1 ELSE -1 END
+            * CASE WHEN outcome = winning_outcome THEN 1 ELSE -1 END
         ) AS winning_volume,
 
         -- alpha_slippage: suma del tamaño en outcomes ganadores / volumen total del mercado
