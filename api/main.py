@@ -1,5 +1,6 @@
 import logging
-from fastapi import FastAPI, Depends
+import os
+from fastapi import FastAPI, Depends, Header, HTTPException
 from pydantic import BaseModel, Field
 from typing import Literal
 from sqlalchemy import text
@@ -10,6 +11,15 @@ from database.manager import DatabaseManager
 
 app = FastAPI(title="Receptor de Resultados R")
 logger = logging.getLogger(__name__)
+
+_API_KEY = os.getenv("API_KEY", "")
+
+
+async def require_api_key(x_api_key: str | None = Header(default=None)):
+    if not _API_KEY:
+        return  # no key configured → open (dev mode)
+    if x_api_key != _API_KEY:
+        raise HTTPException(status_code=401, detail="Invalid or missing API key")
 
 
 # --- Request / Response schemas ---
@@ -48,7 +58,7 @@ async def health():
     return {"status": "ok"}
 
 
-@app.post("/insider-detection", response_model=InsiderDetectionResponse)
+@app.post("/insider-detection", response_model=InsiderDetectionResponse, dependencies=[Depends(require_api_key)])
 async def receive_insider_detection(
     batch: InsiderDetectionBatch,
     session: AsyncSession = Depends(get_session),

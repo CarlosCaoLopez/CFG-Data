@@ -2,7 +2,7 @@ services:
   redis:
     image: redis:7-alpine
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
     volumes:
       - redis_data:/data
     networks:
@@ -20,7 +20,7 @@ services:
       POSTGRES_PASSWORD: insider_pass
       POSTGRES_DB: insider_detection
     ports:
-      - "5433:5432"
+      - "127.0.0.1:5433:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     networks:
@@ -105,7 +105,7 @@ services:
       - REDIS_URL=redis://redis:6379/0
       - DATABASE_URL=postgresql://insider:insider_pass@postgres:5432/insider_detection
     ports:
-      - "8001:8000"
+      - "127.0.0.1:8001:8000"
     depends_on:
       redis:
         condition: service_healthy
@@ -118,6 +118,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.inference
+    env_file: .env
     environment:
       - POSTGRES_HOST=postgres
       - POSTGRES_PORT=5432

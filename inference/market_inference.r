@@ -287,11 +287,15 @@ function(market_id) {
                     wallets   = wallets_payload)
 
     tryCatch({
+      api_key <- Sys.getenv("API_KEY", "")
       resp <- POST(
         url    = api_url,
         body   = toJSON(payload, auto_unbox = TRUE),
         encode = "raw",
-        add_headers(`Content-Type` = "application/json")
+        add_headers(
+          `Content-Type` = "application/json",
+          `X-API-Key`    = api_key
+        )
       )
       if (status_code(resp) == 200) {
         message("Insiders enviados a API para market: ", market_id,
