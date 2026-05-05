@@ -1,0 +1,1469 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CFG Data — The Insider Hunter</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,700;0,900;1,700;1,900&family=DM+Mono:wght@400;500&family=Inter:wght@300;400;500&display=swap" rel="stylesheet">
+
+<style>
+/* ============================================================
+   CSS VARIABLES
+   ============================================================ */
+:root {
+  --bg:       #09090b;
+  --bg2:      #0d0d10;
+  --surface:  #111116;
+  --border:   #1c1c22;
+  --border2:  #252530;
+  --red:      #c41e1e;
+  --red-dim:  rgba(196, 30, 30, 0.12);
+  --red-glow: rgba(196, 30, 30, 0.07);
+  --text:     #f2f2ed;
+  --text2:    #9898a4;
+  --text3:    #4a4a56;
+  --green:    #22c55e;
+  --orange:   #e67e22;
+
+  --serif: 'Playfair Display', Georgia, serif;
+  --mono:  'DM Mono', 'Courier New', monospace;
+  --sans:  'Inter', system-ui, sans-serif;
+
+  --slide-pad-x: clamp(40px, 6vw, 80px);
+  --slide-pad-y: clamp(32px, 5vh, 60px);
+}
+
+/* ============================================================
+   RESET + BASE
+   ============================================================ */
+*, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+html, body {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ============================================================
+   SLIDE SYSTEM — all slides stacked via position:fixed
+   ============================================================ */
+.slide {
+  position: fixed;
+  inset: 0;
+  height: 100vh;
+  height: 100dvh;
+  width: 100vw;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+
+  /* default: hidden */
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(18px);
+  transition: opacity 0.4s ease, transform 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+  z-index: 0;
+}
+
+.slide.active {
+  opacity: 1;
+  pointer-events: all;
+  transform: translateY(0);
+  z-index: 1;
+}
+
+/* ============================================================
+   SHARED DECORATIVE ELEMENTS
+   ============================================================ */
+.glow-tl {
+  position: absolute;
+  top: -140px; left: -140px;
+  width: 520px; height: 520px;
+  background: radial-gradient(ellipse, rgba(196,30,30,0.13) 0%, transparent 65%);
+  pointer-events: none;
+  animation: glowPulse 5s ease-in-out infinite;
+}
+.glow-br {
+  position: absolute;
+  bottom: -100px; right: -100px;
+  width: 380px; height: 380px;
+  background: radial-gradient(ellipse, rgba(196,30,30,0.07) 0%, transparent 65%);
+  pointer-events: none;
+}
+.grid-bg {
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(rgba(255,255,255,0.016) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255,255,255,0.016) 1px, transparent 1px);
+  background-size: 52px 52px;
+  pointer-events: none;
+}
+@keyframes glowPulse {
+  0%, 100% { opacity: 0.7; transform: scale(1); }
+  50%       { opacity: 1;   transform: scale(1.04); }
+}
+
+/* ============================================================
+   TYPOGRAPHY UTILITIES
+   ============================================================ */
+.eyebrow {
+  font-family: var(--mono);
+  font-size: clamp(9px, 1.05vw, 12px);
+  color: var(--red);
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  line-height: 1;
+}
+.section-tag {
+  font-family: var(--mono);
+  font-size: clamp(9px, 0.95vw, 11px);
+  color: var(--text3);
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+}
+.h1 {
+  font-family: var(--serif);
+  font-weight: 900;
+  font-size: clamp(38px, 6.2vw, 80px);
+  line-height: 1.04;
+  color: var(--text);
+  letter-spacing: -0.01em;
+}
+.h2 {
+  font-family: var(--serif);
+  font-weight: 700;
+  font-size: clamp(26px, 3.8vw, 52px);
+  line-height: 1.1;
+  color: var(--text);
+}
+.h3 {
+  font-family: var(--serif);
+  font-weight: 700;
+  font-size: clamp(18px, 2.4vw, 32px);
+  line-height: 1.15;
+  color: var(--text);
+}
+.body {
+  font-family: var(--sans);
+  font-weight: 300;
+  font-size: clamp(13px, 1.5vw, 17px);
+  line-height: 1.65;
+  color: var(--text2);
+}
+.mono {
+  font-family: var(--mono);
+  font-size: clamp(10px, 1.1vw, 13px);
+  color: var(--text2);
+}
+.red   { color: var(--red); }
+.white { color: var(--text); }
+.dim   { color: var(--text3); }
+.green { color: var(--green); }
+em { font-style: italic; }
+strong { font-weight: 500; color: var(--text); }
+
+.divider {
+  width: 44px; height: 2px;
+  background: var(--red);
+  flex-shrink: 0;
+}
+
+/* ============================================================
+   BULLET LIST
+   ============================================================ */
+.bullets {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: clamp(8px, 1.2vh, 14px);
+}
+.bullets li {
+  font-family: var(--sans);
+  font-weight: 300;
+  font-size: clamp(12px, 1.45vw, 16px);
+  color: var(--text2);
+  line-height: 1.55;
+  display: flex;
+  gap: 14px;
+  align-items: flex-start;
+}
+.bullets li::before {
+  content: '—';
+  color: var(--red);
+  font-family: var(--mono);
+  font-size: clamp(10px, 1.1vw, 12px);
+  flex-shrink: 0;
+  margin-top: 3px;
+}
+
+/* ============================================================
+   DATA ROW (receipt/table style)
+   ============================================================ */
+.data-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: clamp(7px, 1vh, 11px) 0;
+  border-bottom: 1px solid var(--border);
+  font-family: var(--mono);
+  font-size: clamp(10px, 1.15vw, 13px);
+}
+.data-row .k { color: var(--text3); letter-spacing: 0.08em; }
+.data-row .v { color: var(--text); font-weight: 500; }
+.data-row .v.red   { color: var(--red); }
+.data-row .v.green { color: var(--green); }
+
+/* ============================================================
+   NAV DOTS
+   ============================================================ */
+#nav {
+  position: fixed;
+  right: clamp(14px, 2vw, 28px);
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  z-index: 200;
+}
+.dot {
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  background: var(--text3);
+  border: none;
+  cursor: pointer;
+  padding: 0;
+  transition: background 0.3s, transform 0.3s;
+}
+.dot:hover { background: var(--text2); }
+.dot.on { background: var(--red); transform: scale(1.5); }
+
+/* ============================================================
+   SLIDE NUMBER
+   ============================================================ */
+#slide-counter {
+  position: fixed;
+  bottom: clamp(14px, 2vh, 24px);
+  right: clamp(14px, 2vw, 28px);
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--text3);
+  letter-spacing: 0.1em;
+  z-index: 200;
+}
+
+/* ============================================================
+   EDIT MODE
+   ============================================================ */
+#edit-zone {
+  position: fixed;
+  top: 0; left: 0;
+  width: 52px; height: 52px;
+  cursor: pointer;
+  z-index: 300;
+}
+#edit-bar {
+  position: fixed;
+  top: 14px; left: 14px;
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--red);
+  letter-spacing: 0.12em;
+  background: rgba(9,9,11,0.92);
+  border: 1px solid rgba(196,30,30,0.35);
+  padding: 6px 14px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.3s;
+  z-index: 300;
+  backdrop-filter: blur(4px);
+}
+#edit-bar.on { opacity: 1; pointer-events: all; }
+#edit-bar button {
+  font-family: var(--mono);
+  font-size: 10px;
+  background: none;
+  border: 1px solid rgba(196,30,30,0.4);
+  color: var(--red);
+  padding: 2px 9px;
+  cursor: pointer;
+  letter-spacing: 0.1em;
+  transition: background 0.2s;
+}
+#edit-bar button:hover { background: rgba(196,30,30,0.15); }
+[contenteditable="true"] {
+  outline: 1px dashed rgba(196,30,30,0.45);
+  outline-offset: 3px;
+  cursor: text;
+  min-width: 20px;
+  min-height: 1em;
+}
+
+/* ============================================================
+   ANIMATION CLASSES
+   (fire when parent .slide gains .active — force reflow on nav)
+   ============================================================ */
+@keyframes kFadeIn  { from { opacity: 0; } to { opacity: 1; } }
+@keyframes kUp      { from { opacity: 0; transform: translateY(26px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes kRight   { from { opacity: 0; transform: translateX(-18px); } to { opacity: 1; transform: translateX(0); } }
+@keyframes kExpand  { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+@keyframes kCount   { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+
+.slide.active .af { animation: kFadeIn 0.65s ease both; }
+.slide.active .au { animation: kUp     0.75s cubic-bezier(0.16,1,0.3,1) both; }
+.slide.active .ar { animation: kRight  0.65s ease both; }
+.slide.active .ax { animation: kExpand 0.75s ease both; transform-origin: left; }
+.slide.active .ac { animation: kCount  0.55s ease both; }
+
+.d1  { animation-delay: 0.04s; }
+.d2  { animation-delay: 0.16s; }
+.d3  { animation-delay: 0.28s; }
+.d4  { animation-delay: 0.42s; }
+.d5  { animation-delay: 0.56s; }
+.d6  { animation-delay: 0.70s; }
+.d7  { animation-delay: 0.84s; }
+.d8  { animation-delay: 0.98s; }
+.d9  { animation-delay: 1.12s; }
+
+/* Reduced motion */
+@media (prefers-reduced-motion: reduce) {
+  .slide { transition: none; }
+  .af,.au,.ar,.ax,.ac { animation: none !important; }
+}
+
+/* ============================================================
+   HEIGHT BREAKPOINTS
+   ============================================================ */
+@media (max-height: 700px) {
+  .h1 { font-size: clamp(30px, 5vw, 58px); }
+  .h2 { font-size: clamp(22px, 3.2vw, 40px); }
+  .bullets li { font-size: clamp(11px, 1.3vw, 14px); gap: 10px; }
+  .bullets { gap: 6px; }
+  .body { font-size: clamp(11px, 1.3vw, 14px); }
+  :root { --slide-pad-y: clamp(20px, 3vh, 36px); }
+}
+@media (max-height: 600px) {
+  .h1 { font-size: 28px; }
+  .h2 { font-size: 22px; }
+  .bullets li { font-size: 11px; }
+  .bullets { gap: 4px; }
+}
+@media (max-height: 500px) {
+  .h1 { font-size: 24px; }
+  .h2 { font-size: 18px; }
+  :root { --slide-pad-y: 16px; }
+}
+
+/* ============================================================
+   ── SLIDE 1: TITLE ──────────────────────────────────────────
+   ============================================================ */
+#s1 {
+  justify-content: center;
+  padding: var(--slide-pad-y) var(--slide-pad-x);
+}
+#s1 .inner {
+  max-width: 820px;
+  display: flex;
+  flex-direction: column;
+  gap: clamp(14px, 2.2vh, 26px);
+}
+#s1 .tag-line {
+  font-family: var(--sans);
+  font-weight: 300;
+  font-size: clamp(13px, 1.5vw, 17px);
+  color: var(--text2);
+  max-width: 560px;
+  line-height: 1.6;
+}
+
+/* ============================================================
+   ── SLIDE 2: THE HOOK ────────────────────────────────────────
+   ============================================================ */
+#s2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+}
+#s2 .left {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: var(--slide-pad-y) var(--slide-pad-x);
+  gap: clamp(12px, 1.8vh, 20px);
+  border-right: 1px solid var(--border);
+}
+#s2 .right {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: var(--slide-pad-y) clamp(32px, 5vw, 60px);
+  background: var(--bg2);
+  gap: 0;
+}
+.receipt-head {
+  font-family: var(--mono);
+  font-size: clamp(9px, 0.95vw, 11px);
+  color: var(--text3);
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  padding-bottom: clamp(8px, 1.5vh, 14px);
+  border-bottom: 1px solid var(--border);
+  margin-bottom: clamp(6px, 1.2vh, 12px);
+}
+.verdict-band {
+  margin-top: clamp(10px, 1.8vh, 18px);
+  padding: clamp(10px, 1.6vh, 16px);
+  background: rgba(196,30,30,0.07);
+  border: 1px solid rgba(196,30,30,0.25);
+  border-left: 3px solid var(--red);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-family: var(--mono);
+  font-size: clamp(10px, 1.15vw, 13px);
+}
+.italic-note {
+  font-family: var(--serif);
+  font-style: italic;
+  font-size: clamp(14px, 1.7vw, 19px);
+  color: var(--text2);
+  line-height: 1.4;
+}
+.italic-note strong { color: var(--red); font-style: normal; }
+
+/* ============================================================
+   ── SLIDE 3: THE PROBLEM ────────────────────────────────────
+   ============================================================ */
+#s3 {
+  justify-content: center;
+  padding: var(--slide-pad-y) var(--slide-pad-x);
+}
+#s3 .inner {
+  max-width: 740px;
+  display: flex;
+  flex-direction: column;
+  gap: clamp(14px, 2.2vh, 26px);
+}
+
+/* ============================================================
+   ── SLIDE 4: PIPELINE ───────────────────────────────────────
+   ============================================================ */
+#s4 {
+  justify-content: center;
+  padding: var(--slide-pad-y) var(--slide-pad-x);
+}
+#s4 .inner {
+  max-width: 900px;
+  display: flex;
+  flex-direction: column;
+  gap: clamp(12px, 1.8vh, 22px);
+}
+.pipe-list {
+  display: flex;
+  flex-direction: column;
+  gap: clamp(5px, 0.8vh, 9px);
+}
+.pipe-row {
+  display: grid;
+  grid-template-columns: 28px clamp(70px, 7vw, 100px) 1fr auto;
+  gap: clamp(10px, 1.5vw, 18px);
+  align-items: center;
+  padding: clamp(9px, 1.3vh, 14px) clamp(14px, 1.8vw, 20px);
+  border: 1px solid var(--border);
+  background: rgba(255,255,255,0.008);
+  transition: border-color 0.2s;
+}
+.pipe-row:hover { border-color: var(--border2); }
+.pipe-n {
+  font-family: var(--mono);
+  font-size: clamp(10px, 1.1vw, 12px);
+  color: var(--red);
+}
+.pipe-layer {
+  font-family: var(--mono);
+  font-size: clamp(9px, 1vw, 11px);
+  color: var(--text3);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+.pipe-desc {
+  font-family: var(--sans);
+  font-weight: 300;
+  font-size: clamp(11px, 1.3vw, 14px);
+  color: var(--text2);
+  line-height: 1.4;
+}
+.pipe-tech {
+  font-family: var(--mono);
+  font-size: clamp(8px, 0.9vw, 10px);
+  color: var(--text3);
+  white-space: nowrap;
+}
+
+/* ============================================================
+   ── SLIDE 5: LAYER A / DUAL DISCOVERY ───────────────────────
+   ============================================================ */
+#s5 {
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+}
+#s5 .s-head {
+  padding: clamp(22px, 3.5vh, 40px) var(--slide-pad-x);
+  padding-bottom: clamp(14px, 2vh, 22px);
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+#s5 .cols {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  overflow: hidden;
+}
+#s5 .col {
+  padding: clamp(18px, 3vh, 34px) var(--slide-pad-x);
+  display: flex;
+  flex-direction: column;
+  gap: clamp(10px, 1.6vh, 18px);
+}
+#s5 .col:first-child { border-right: 1px solid var(--border); }
+.col-label {
+  font-family: var(--mono);
+  font-size: clamp(9px, 1vw, 11px);
+  color: var(--red);
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+}
+#s5 .s-foot {
+  padding: clamp(12px, 1.8vh, 20px) var(--slide-pad-x);
+  border-top: 1px solid var(--border);
+  display: flex;
+  gap: 16px;
+  align-items: center;
+}
+
+/* ============================================================
+   ── SLIDE 6: COLLECTION + REDIS ─────────────────────────────
+   ============================================================ */
+#s6 {
+  justify-content: center;
+  padding: var(--slide-pad-y) var(--slide-pad-x);
+}
+#s6 .inner {
+  max-width: 880px;
+  display: flex;
+  flex-direction: column;
+  gap: clamp(14px, 2vh, 24px);
+}
+.collect-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+.c-step {
+  display: flex;
+  gap: clamp(14px, 2vw, 22px);
+  align-items: flex-start;
+  padding: clamp(9px, 1.3vh, 14px) 0;
+  border-bottom: 1px solid var(--border);
+}
+.c-n {
+  font-family: var(--mono);
+  font-size: clamp(11px, 1.2vw, 14px);
+  color: var(--red);
+  flex-shrink: 0;
+  width: 22px;
+  font-weight: 500;
+  padding-top: 1px;
+}
+.c-txt {
+  font-family: var(--sans);
+  font-weight: 300;
+  font-size: clamp(12px, 1.4vw, 15px);
+  color: var(--text2);
+  line-height: 1.5;
+}
+.streams-wrap {
+  display: flex;
+  gap: clamp(6px, 1vw, 12px);
+  flex-wrap: wrap;
+}
+.stream-tag {
+  font-family: var(--mono);
+  font-size: clamp(9px, 0.95vw, 11px);
+  padding: clamp(4px, 0.7vh, 7px) clamp(10px, 1.3vw, 16px);
+  border: 1px solid var(--border);
+  color: var(--text3);
+}
+.stream-tag.hi {
+  border-color: rgba(196,30,30,0.4);
+  color: var(--red);
+  background: rgba(196,30,30,0.04);
+}
+
+/* ============================================================
+   ── SLIDE 7: FIVE VARIABLES ─────────────────────────────────
+   ============================================================ */
+#s7 {
+  display: grid;
+  grid-template-rows: auto 1fr;
+}
+#s7 .s-head {
+  padding: clamp(22px, 3.5vh, 40px) var(--slide-pad-x);
+  padding-bottom: clamp(14px, 2vh, 22px);
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.var-table {
+  padding: clamp(10px, 1.8vh, 22px) var(--slide-pad-x);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.var-head {
+  display: grid;
+  grid-template-columns: clamp(52px, 6vw, 80px) 1fr clamp(90px, 16vw, 190px) clamp(52px, 7vw, 88px);
+  gap: 14px;
+  padding: clamp(7px, 1vh, 11px) clamp(10px, 1.2vw, 16px);
+  font-family: var(--mono);
+  font-size: clamp(8px, 0.85vw, 10px);
+  color: var(--text3);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  border-bottom: 1px solid var(--border);
+}
+.var-row {
+  display: grid;
+  grid-template-columns: clamp(52px, 6vw, 80px) 1fr clamp(90px, 16vw, 190px) clamp(52px, 7vw, 88px);
+  gap: 14px;
+  padding: clamp(10px, 1.5vh, 16px) clamp(10px, 1.2vw, 16px);
+  border-bottom: 1px solid var(--border);
+  align-items: center;
+  transition: background 0.2s;
+}
+.var-row:hover { background: rgba(196,30,30,0.04); }
+.vn {
+  font-family: var(--mono);
+  font-size: clamp(13px, 1.5vw, 17px);
+  color: var(--text);
+  font-weight: 500;
+}
+.vd {
+  font-family: var(--sans);
+  font-weight: 300;
+  font-size: clamp(11px, 1.25vw, 14px);
+  color: var(--text2);
+  line-height: 1.4;
+}
+.vf {
+  font-family: var(--mono);
+  font-size: clamp(8px, 0.95vw, 11px);
+  color: var(--text3);
+  line-height: 1.4;
+}
+.vt {
+  font-family: var(--mono);
+  font-size: clamp(10px, 1.1vw, 13px);
+  text-align: right;
+}
+.t-lo { color: var(--orange); }
+.t-hi { color: var(--red); }
+.t-off { color: var(--text3); }
+
+/* ============================================================
+   ── SLIDE 8: THE JUDGE ──────────────────────────────────────
+   ============================================================ */
+#s8 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+}
+#s8 .left {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: var(--slide-pad-y) var(--slide-pad-x);
+  gap: clamp(12px, 1.8vh, 20px);
+  border-right: 1px solid var(--border);
+}
+#s8 .right {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: var(--slide-pad-y) clamp(28px, 4.5vw, 56px);
+  background: var(--bg2);
+  gap: clamp(10px, 1.5vh, 18px);
+}
+.crit-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: clamp(7px, 1.1vw, 12px);
+}
+.crit-box {
+  padding: clamp(9px, 1.4vh, 15px);
+  border: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  transition: border-color 0.2s;
+}
+.crit-box:hover { border-color: rgba(196,30,30,0.4); }
+.cb-var  { font-family: var(--mono); font-size: clamp(11px, 1.3vw, 15px); color: var(--text); }
+.cb-pct  { font-family: var(--mono); font-size: clamp(15px, 1.9vw, 22px); font-weight: 500; color: var(--red); }
+.cb-lbl  { font-family: var(--sans); font-weight: 300; font-size: clamp(9px, 0.95vw, 11px); color: var(--text3); }
+.verdict-block {
+  border: 1px solid rgba(196,30,30,0.4);
+  background: rgba(196,30,30,0.05);
+  border-left: 3px solid var(--red);
+  padding: clamp(12px, 1.8vh, 20px);
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.vb-label {
+  font-family: var(--mono);
+  font-size: clamp(9px, 0.95vw, 11px);
+  color: var(--red);
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+}
+.vb-text {
+  font-family: var(--serif);
+  font-size: clamp(18px, 2.4vw, 30px);
+  font-weight: 700;
+  color: var(--text);
+}
+
+/* ============================================================
+   ── SLIDE 9: ALERT + LOOP ───────────────────────────────────
+   ============================================================ */
+#s9 {
+  justify-content: center;
+  padding: var(--slide-pad-y) var(--slide-pad-x);
+}
+#s9 .inner {
+  max-width: 880px;
+  display: flex;
+  flex-direction: column;
+  gap: clamp(14px, 2vh, 24px);
+}
+.flow-chain {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  margin-left: 7px;
+  border-left: 2px solid var(--border);
+}
+.f-step {
+  display: flex;
+  gap: clamp(12px, 1.8vw, 20px);
+  padding: clamp(10px, 1.4vh, 15px) clamp(12px, 1.5vw, 18px);
+  position: relative;
+  border-bottom: 1px solid transparent;
+}
+.f-step::before {
+  content: '';
+  position: absolute;
+  left: calc(-1 * clamp(5px, 0.7vw, 8px));
+  top: clamp(13px, 1.8vh, 18px);
+  width: clamp(10px, 1.3vw, 14px);
+  height: clamp(10px, 1.3vw, 14px);
+  border-radius: 50%;
+  background: var(--bg);
+  border: 2px solid var(--border);
+}
+.f-step.hi { border-left: none; }
+.f-step.hi::before { border-color: var(--red); background: rgba(196,30,30,0.15); }
+.f-src {
+  font-family: var(--mono);
+  font-size: clamp(9px, 0.95vw, 11px);
+  color: var(--text3);
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  flex-shrink: 0;
+  width: clamp(56px, 6.5vw, 88px);
+  padding-top: 2px;
+}
+.f-act {
+  font-family: var(--sans);
+  font-weight: 300;
+  font-size: clamp(12px, 1.35vw, 15px);
+  color: var(--text2);
+  line-height: 1.5;
+}
+
+/* ============================================================
+   ── SLIDE 10: THE VERDICT ───────────────────────────────────
+   ============================================================ */
+#s10 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+}
+#s10 .left {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: var(--slide-pad-y) var(--slide-pad-x);
+  gap: clamp(12px, 1.8vh, 20px);
+  border-right: 1px solid var(--border);
+}
+#s10 .right {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: var(--slide-pad-y) clamp(28px, 4.5vw, 56px);
+  background: var(--bg2);
+  gap: 0;
+}
+.sig-head {
+  font-family: var(--mono);
+  font-size: clamp(9px, 0.95vw, 11px);
+  color: var(--text3);
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  padding-bottom: clamp(8px, 1.4vh, 14px);
+  border-bottom: 1px solid var(--border);
+  margin-bottom: clamp(4px, 0.8vh, 8px);
+}
+.sig-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: clamp(8px, 1.2vh, 13px) 0;
+  border-bottom: 1px solid var(--border);
+  font-family: var(--mono);
+  font-size: clamp(10px, 1.1vw, 13px);
+}
+.sig-row .k { color: var(--text3); }
+.sig-row .v { color: var(--red); font-weight: 500; }
+.sig-row .chk { color: var(--green); margin-left: 8px; }
+.final-box {
+  margin-top: clamp(10px, 1.6vh, 18px);
+  padding: clamp(12px, 1.8vh, 18px);
+  background: rgba(196,30,30,0.07);
+  border: 1px solid rgba(196,30,30,0.3);
+  border-left: 3px solid var(--red);
+  font-family: var(--mono);
+  font-size: clamp(9px, 1.1vw, 13px);
+  color: var(--red);
+  letter-spacing: 0.1em;
+  text-align: center;
+}
+
+/* ============================================================
+   ── SLIDE 11: CLOSING ───────────────────────────────────────
+   ============================================================ */
+#s11 {
+  justify-content: center;
+  align-items: center;
+  text-align: center;
+  padding: var(--slide-pad-y) var(--slide-pad-x);
+}
+#s11 .inner {
+  max-width: 660px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: clamp(16px, 2.4vh, 28px);
+}
+.chip-wrap {
+  display: flex;
+  flex-wrap: wrap;
+  gap: clamp(6px, 0.9vw, 10px);
+  justify-content: center;
+}
+.chip {
+  font-family: var(--mono);
+  font-size: clamp(9px, 0.95vw, 11px);
+  padding: clamp(4px, 0.7vh, 7px) clamp(10px, 1.3vw, 15px);
+  border: 1px solid var(--border);
+  color: var(--text3);
+}
+.closing-q {
+  font-family: var(--serif);
+  font-style: italic;
+  font-size: clamp(20px, 2.8vw, 36px);
+  color: var(--text);
+  line-height: 1.3;
+}
+.closing-by {
+  font-family: var(--mono);
+  font-size: clamp(9px, 0.95vw, 11px);
+  color: var(--text3);
+  letter-spacing: 0.16em;
+}
+</style>
+</head>
+<body>
+
+<!-- ── NAV DOTS ── -->
+<nav id="nav" aria-label="Slide navigation">
+  <button class="dot on"  data-i="0" title="Title"></button>
+  <button class="dot"     data-i="1" title="The Hook"></button>
+  <button class="dot"     data-i="2" title="The Problem"></button>
+  <button class="dot"     data-i="3" title="Pipeline"></button>
+  <button class="dot"     data-i="4" title="Dual Discovery"></button>
+  <button class="dot"     data-i="5" title="Collection"></button>
+  <button class="dot"     data-i="6" title="Five Variables"></button>
+  <button class="dot"     data-i="7" title="The Judge"></button>
+  <button class="dot"     data-i="8" title="Alert + Loop"></button>
+  <button class="dot"     data-i="9" title="The Verdict"></button>
+  <button class="dot"     data-i="10" title="Closing"></button>
+</nav>
+
+<div id="slide-counter">01 / 11</div>
+
+<!-- ── EDIT MODE ── -->
+<div id="edit-zone" title="Click or press E to edit"></div>
+<div id="edit-bar">
+  <span>● EDIT MODE</span>
+  <button id="btn-save">SAVE  Ctrl+S</button>
+  <button id="btn-export">EXPORT</button>
+  <button id="btn-close">ESC</button>
+</div>
+
+<!-- ================================================================
+     SLIDE 1 — TITLE
+     ================================================================ -->
+<section class="slide active" id="s1">
+  <div class="glow-tl"></div>
+  <div class="glow-br"></div>
+  <div class="grid-bg"></div>
+
+  <div class="inner">
+    <div class="eyebrow af d1" data-e="s1-ey">CFG DATA · INSIDER DETECTION SYSTEM</div>
+    <h1 class="h1 au d2" data-e="s1-t">The market<br>doesn't lie.<br>But people <span class="red">do.</span></h1>
+    <div class="divider ax d3"></div>
+    <p class="tag-line af d4" data-e="s1-sub">
+      A real-time pipeline that hunts insider trading on Polymarket —
+      from on-chain signals to statistical verdict, fully automated.
+    </p>
+  </div>
+</section>
+
+<!-- ================================================================
+     SLIDE 2 — THE HOOK
+     ================================================================ -->
+<section class="slide" id="s2">
+  <div class="glow-tl"></div>
+  <div class="grid-bg"></div>
+
+  <!-- Left: narrative -->
+  <div class="left">
+    <div class="section-tag af d1" data-e="s2-tag">February 9, 2025 · Super Bowl Halftime Show</div>
+    <h2 class="h2 au d2" data-e="s2-t">A market opens:<br><span class="red">"Will Bad Bunny<br>perform?"</span></h2>
+    <p class="body af d3" data-e="s2-b">
+      The odds sit at 30¢. Plausible, but far from certain. Then, 48 hours before the show, a wallet appears.
+    </p>
+    <p class="italic-note af d5" data-e="s2-note">
+      And it did this <strong>9 times in a row.</strong>
+    </p>
+  </div>
+
+  <!-- Right: blockchain receipt -->
+  <div class="right">
+    <div class="receipt-head af d2" data-e="s2-rh">TRADE RECEIPT · ON-CHAIN RECORD</div>
+    <div class="data-row af d3"><span class="k">WALLET</span><span class="v">0xf3a...b12</span></div>
+    <div class="data-row af d3"><span class="k">MARKET</span><span class="v">Super Bowl Halftime</span></div>
+    <div class="data-row af d4"><span class="k">POSITION</span><span class="v">YES — Bad Bunny performs</span></div>
+    <div class="data-row af d4"><span class="k">STAKE</span><span class="v">$35,000 USDC</span></div>
+    <div class="data-row af d5"><span class="k">PRICE</span><span class="v">$0.31</span></div>
+    <div class="data-row af d5"><span class="k">HOURS BEFORE SHOW</span><span class="v red">48h</span></div>
+    <div class="data-row af d6"><span class="k">OUTCOME</span><span class="v green">BAD BUNNY PERFORMS ✓</span></div>
+    <div class="data-row af d7"><span class="k">COLLECTED</span><span class="v green">$112,000 USDC</span></div>
+    <div class="verdict-band af d8">
+      <span class="k">NET PROFIT</span>
+      <span class="v red">+$77,000 · Luck?</span>
+    </div>
+  </div>
+</section>
+
+<!-- ================================================================
+     SLIDE 3 — THE PROBLEM
+     ================================================================ -->
+<section class="slide" id="s3">
+  <div class="glow-tl"></div>
+  <div class="grid-bg"></div>
+
+  <div class="inner">
+    <div class="eyebrow af d1" data-e="s3-ey">The Challenge</div>
+    <h2 class="h2 au d2" data-e="s3-t">Luck, or<br>information?</h2>
+    <div class="divider ax d3"></div>
+    <ul class="bullets">
+      <li class="ar d3" data-e="s3-b1">Hundreds of markets close every day — <strong>sports, politics, crypto, pop culture</strong></li>
+      <li class="ar d4" data-e="s3-b2">Every trade is permanently public on-chain: wallet, amount, timing, outcome — <strong>all visible to anyone</strong></li>
+      <li class="ar d5" data-e="s3-b3">The signal is subtle: not just <em>"did they win?"</em> — <strong>when</strong> they bet, <strong>how much</strong>, <strong>how old</strong> the wallet, <strong>how focused</strong> their portfolio</li>
+      <li class="ar d6" data-e="s3-b4">You can't review this manually. You need a system that watches <strong>everything, 24/7</strong>, and decides automatically</li>
+    </ul>
+  </div>
+</section>
+
+<!-- ================================================================
+     SLIDE 4 — PIPELINE OVERVIEW
+     ================================================================ -->
+<section class="slide" id="s4">
+  <div class="glow-tl"></div>
+  <div class="grid-bg"></div>
+
+  <div class="inner">
+    <div class="eyebrow af d1" data-e="s4-ey">System Architecture</div>
+    <h2 class="h2 au d2" data-e="s4-t">The Pipeline</h2>
+    <div class="divider ax d2"></div>
+    <div class="pipe-list">
+      <div class="pipe-row af d3"><span class="pipe-n">①</span><span class="pipe-layer">Layer A</span><span class="pipe-desc" data-e="s4-p1">L1 discovers active markets via WebSocket on-chain + Gamma API. Detects close. Publishes batch.</span><span class="pipe-tech">Python async</span></div>
+      <div class="pipe-row af d3"><span class="pipe-n">②</span><span class="pipe-layer">Layer B</span><span class="pipe-desc" data-e="s4-p2">Redis Streams decouple ingestion from processing — 4 independent streams, at-least-once delivery via consumer groups.</span><span class="pipe-tech">Redis Streams</span></div>
+      <div class="pipe-row af d4"><span class="pipe-n">③</span><span class="pipe-layer">Layer Q</span><span class="pipe-desc" data-e="s4-p3">Orchestrator reads Redis, persists wallets → markets → trades in FK order, dispatches Task T2.</span><span class="pipe-tech">Python async</span></div>
+      <div class="pipe-row af d4"><span class="pipe-n">④</span><span class="pipe-layer">Task T2</span><span class="pipe-desc" data-e="s4-p4">SQL script computes 5 statistical variables per wallet for the closed market. Stores in temp table.</span><span class="pipe-tech">Celery + SQL</span></div>
+      <div class="pipe-row af d5"><span class="pipe-n">⑤</span><span class="pipe-layer">Layer D</span><span class="pipe-desc" data-e="s4-p5">R engine reads variables from DB, applies empirical percentile criterion, delivers verdict via HTTP.</span><span class="pipe-tech">R + Plumber</span></div>
+      <div class="pipe-row af d5"><span class="pipe-n">⑥</span><span class="pipe-layer">Layer E</span><span class="pipe-desc" data-e="s4-p6">FastAPI receives insider list, flags wallets, cleans up temp data, triggers L2 monitoring via T3.</span><span class="pipe-tech">FastAPI</span></div>
+      <div class="pipe-row af d6"><span class="pipe-n">⑦</span><span class="pipe-layer">Layer A L2</span><span class="pipe-desc" data-e="s4-p7">L2 monitors flagged wallets continuously — polls trades every 30s, filters by insider categories.</span><span class="pipe-tech">Python async</span></div>
+    </div>
+  </div>
+</section>
+
+<!-- ================================================================
+     SLIDE 5 — DUAL DISCOVERY
+     ================================================================ -->
+<section class="slide" id="s5">
+  <div class="glow-tl"></div>
+  <div class="grid-bg"></div>
+
+  <div class="s-head">
+    <div class="eyebrow af d1" data-e="s5-ey">Layer A · L1 MarketCloseListener</div>
+    <h2 class="h2 au d2" data-e="s5-t">Two Eyes on Every Market</h2>
+  </div>
+
+  <div class="cols">
+    <!-- Eye 1 -->
+    <div class="col">
+      <div class="col-label af d2">Eye #1 — Blockchain WebSocket</div>
+      <ul class="bullets">
+        <li class="ar d3" data-e="s5-w1">Listens to raw <strong>OrderFilled events</strong> emitted by the CTFExchange contract on Polygon RPC</li>
+        <li class="ar d4" data-e="s5-w2">Polymarket's own WebSocket is <strong>anonymous</strong> — the blockchain isn't. This is how we get wallet addresses.</li>
+        <li class="ar d5" data-e="s5-w3">Discovers a market the <strong>instant it has on-chain activity</strong> — zero lag, continuous</li>
+      </ul>
+    </div>
+    <!-- Eye 2 -->
+    <div class="col">
+      <div class="col-label af d3">Eye #2 — Gamma API (every 15 min)</div>
+      <ul class="bullets">
+        <li class="ar d4" data-e="s5-g1">Safety net for <strong>quiet markets</strong> — low activity means few on-chain events the WebSocket would catch</li>
+        <li class="ar d5" data-e="s5-g2">Sweeps all open markets above volume threshold: <strong>zero-gap coverage</strong></li>
+        <li class="ar d6" data-e="s5-g3">Together: <strong>every relevant market</strong> is tracked, regardless of activity level</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="s-foot">
+    <div class="section-tag af d6">Every 60s →</div>
+    <p class="body af d6" data-e="s5-f">Close detection loop polls each tracked market. <strong>Market closed?</strong> Collect everything.</p>
+  </div>
+</section>
+
+<!-- ================================================================
+     SLIDE 6 — COLLECTION + REDIS
+     ================================================================ -->
+<section class="slide" id="s6">
+  <div class="glow-tl"></div>
+  <div class="grid-bg"></div>
+
+  <div class="inner">
+    <div class="eyebrow af d1" data-e="s6-ey">On Market Close</div>
+    <h2 class="h2 au d2" data-e="s6-t">Market closed. Go.</h2>
+    <div class="divider ax d2"></div>
+    <div class="collect-steps">
+      <div class="c-step af d3">
+        <span class="c-n">1</span>
+        <span class="c-txt" data-e="s6-s1">Fetch <strong>every single trade</strong> ever placed on that market via the Polymarket Data API</span>
+      </div>
+      <div class="c-step af d4">
+        <span class="c-n">2</span>
+        <span class="c-txt" data-e="s6-s2">For each wallet: look up its <strong>age on the Polygon blockchain via Etherscan V2</strong> (chainid=137) — not just Polymarket activity. A wallet created 3 days ago for one big bet is a red flag that needs to be measured.</span>
+      </div>
+      <div class="c-step af d5">
+        <span class="c-n">3</span>
+        <span class="c-txt" data-e="s6-s3">Normalize everything into a single validated <strong>MarketDataBatch</strong> Pydantic contract: trades, wallet ages, market metadata</span>
+      </div>
+      <div class="c-step af d6">
+        <span class="c-n">4</span>
+        <span class="c-txt" data-e="s6-s4">Push to <strong>Redis Streams</strong> — consumer groups with explicit ACK, survives restarts, at-least-once guaranteed</span>
+      </div>
+    </div>
+    <div class="streams-wrap af d7">
+      <div class="stream-tag hi" data-e="s6-st1">closed_markets</div>
+      <div class="stream-tag"    data-e="s6-st2">raw_data</div>
+      <div class="stream-tag"    data-e="s6-st3">insider_trades</div>
+      <div class="stream-tag"    data-e="s6-st4">insider_commands</div>
+    </div>
+  </div>
+</section>
+
+<!-- ================================================================
+     SLIDE 7 — FIVE VARIABLES
+     ================================================================ -->
+<section class="slide" id="s7">
+  <div class="glow-tl"></div>
+  <div class="grid-bg"></div>
+
+  <div class="s-head">
+    <div class="eyebrow af d1" data-e="s7-ey">Task T2 · Celery · SQL</div>
+    <h2 class="h2 au d2" data-e="s7-t">Five Numbers That Tell a Story</h2>
+  </div>
+
+  <div class="var-table">
+    <div class="var-head">
+      <span>Variable</span><span>What it measures</span><span>Formula</span><span>Threshold</span>
+    </div>
+    <div class="var-row af d2">
+      <span class="vn">Δt</span>
+      <span class="vd" data-e="s7-d1">Hours between last trade and market close — the closer to the wire, the more suspicious</span>
+      <span class="vf">MIN(end_date − timestamp) per wallet</span>
+      <span class="vt t-lo">≤ P<sub>1%</sub></span>
+    </div>
+    <div class="var-row af d3">
+      <span class="vn">Age</span>
+      <span class="vd" data-e="s7-d2">Wallet age on Polygon in days — burner wallets are days old, established traders are years old</span>
+      <span class="vf">MAX(1, end_date − first_seen_at)</span>
+      <span class="vt t-lo">≤ P<sub>1%</sub></span>
+    </div>
+    <div class="var-row af d4">
+      <span class="vn">Win.Vol</span>
+      <span class="vd" data-e="s7-d3">Net USDC placed on the correct outcome, weighted by trade direction (buy/sell) and result</span>
+      <span class="vf">Σ size × prize × side × outcome sign</span>
+      <span class="vt t-hi">≥ P<sub>99%</sub></span>
+    </div>
+    <div class="var-row af d5">
+      <span class="vn">α</span>
+      <span class="vd" data-e="s7-d4">Wallet's share of total market volume — did they move the price with their position?</span>
+      <span class="vf">Σ size_usdc / market.volume_usdc</span>
+      <span class="vt t-hi">≥ P<sub>99%</sub></span>
+    </div>
+    <div class="var-row af d6">
+      <span class="vn">H</span>
+      <span class="vd" data-e="s7-d5">Portfolio entropy across categories — a focused, specialist wallet is more suspicious</span>
+      <span class="vf">−Σ P·ln(P) over all categories</span>
+      <span class="vt t-off">⚑ disabled</span>
+    </div>
+  </div>
+</section>
+
+<!-- ================================================================
+     SLIDE 8 — THE JUDGE
+     ================================================================ -->
+<section class="slide" id="s8">
+  <div class="glow-tl"></div>
+  <div class="grid-bg"></div>
+
+  <!-- Left: explanation -->
+  <div class="left">
+    <div class="eyebrow af d1" data-e="s8-ey">Layer D · R + Plumber</div>
+    <h2 class="h2 au d2" data-e="s8-t">The Judge</h2>
+    <div class="divider ax d2"></div>
+    <ul class="bullets">
+      <li class="ar d3" data-e="s8-b1">Receives only <strong>market_id</strong> via HTTP — reads the computed variables directly from the database</li>
+      <li class="ar d4" data-e="s8-b2"><strong>Empirical percentile thresholds</strong> — no parametric distribution assumptions. Polymarket data is fat-tailed, non-normal, and weird.</li>
+      <li class="ar d5" data-e="s8-b3">A lucky wallet hits <strong>one or two</strong> signals. An insider hits <strong>all four simultaneously.</strong></li>
+    </ul>
+  </div>
+
+  <!-- Right: criterion boxes + verdict -->
+  <div class="right">
+    <div class="section-tag af d2">Criterion — all 4 required simultaneously</div>
+    <div class="crit-grid">
+      <div class="crit-box af d3">
+        <span class="cb-var">Δt</span>
+        <span class="cb-pct">≤ P 1%</span>
+        <span class="cb-lbl">Traded near the wire</span>
+      </div>
+      <div class="crit-box af d3">
+        <span class="cb-var">Age</span>
+        <span class="cb-pct">≤ P 1%</span>
+        <span class="cb-lbl">Very young wallet</span>
+      </div>
+      <div class="crit-box af d4">
+        <span class="cb-var">Win.Vol</span>
+        <span class="cb-pct">≥ P 99%</span>
+        <span class="cb-lbl">Extreme winning bet</span>
+      </div>
+      <div class="crit-box af d4">
+        <span class="cb-var">α</span>
+        <span class="cb-pct">≥ P 99%</span>
+        <span class="cb-lbl">Moved the market</span>
+      </div>
+    </div>
+    <div class="verdict-block af d6">
+      <span class="vb-label">Verdict — when all 4 are met</span>
+      <span class="vb-text" data-e="s8-v">4 critical regions → INSIDER</span>
+    </div>
+  </div>
+</section>
+
+<!-- ================================================================
+     SLIDE 9 — ALERT + FEEDBACK LOOP
+     ================================================================ -->
+<section class="slide" id="s9">
+  <div class="glow-tl"></div>
+  <div class="grid-bg"></div>
+
+  <div class="inner">
+    <div class="eyebrow af d1" data-e="s9-ey">Layer E · Tasks T3 / T4 · Layer A L2</div>
+    <h2 class="h2 au d2" data-e="s9-t">The Alert Fires</h2>
+    <div class="divider ax d2"></div>
+
+    <div class="flow-chain">
+      <div class="f-step hi af d3">
+        <span class="f-src">Motor D</span>
+        <span class="f-act" data-e="s9-f1"><strong>POST /insider-detection</strong> → FastAPI receives the verdict: which wallets, which categories</span>
+      </div>
+      <div class="f-step af d4">
+        <span class="f-src">FastAPI E</span>
+        <span class="f-act" data-e="s9-f2">Sets <strong>wallet.insider = true</strong> in PostgreSQL, stores categories_insider and market IDs</span>
+      </div>
+      <div class="f-step af d4">
+        <span class="f-src">FastAPI E</span>
+        <span class="f-act" data-e="s9-f3">Deletes the <strong>temporary variables table</strong> for that market — job done, data cleaned up, inline</span>
+      </div>
+      <div class="f-step hi af d5">
+        <span class="f-src">Task T3</span>
+        <span class="f-act" data-e="s9-f4">Publishes <strong>ADD_WALLET command</strong> to Redis stream insider_commands — L2 picks it up immediately</span>
+      </div>
+      <div class="f-step af d5">
+        <span class="f-src">L2 Watcher</span>
+        <span class="f-act" data-e="s9-f5">Polls the wallet's trades every <strong>30 seconds</strong>, filters by insider categories, stores in insider_trades <strong>permanently</strong></span>
+      </div>
+      <div class="f-step hi af d6">
+        <span class="f-src">Result</span>
+        <span class="f-act" data-e="s9-f6">The wallet is under <strong>continuous surveillance</strong>. Every future suspicious trade is recorded in real-time.</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ================================================================
+     SLIDE 10 — THE VERDICT (back to Bad Bunny)
+     ================================================================ -->
+<section class="slide" id="s10">
+  <div class="glow-tl"></div>
+  <div class="grid-bg"></div>
+
+  <!-- Left: narrative -->
+  <div class="left">
+    <div class="eyebrow af d1" data-e="s10-ey">Back to our wallet</div>
+    <h2 class="h2 au d2" data-e="s10-t">0xf3a...b12.<br>The Bad Bunny<br>wallet.</h2>
+    <div class="divider ax d3"></div>
+    <p class="body af d4" data-e="s10-b1">
+      The moment that market closed, every number was computed automatically. The R engine ran. The verdict took under 60 seconds.
+    </p>
+    <p class="body af d5" style="color: var(--text); font-style: italic;" data-e="s10-b2">
+      "Its next trade was already being watched before Bad Bunny left the stage."
+    </p>
+  </div>
+
+  <!-- Right: signal breakdown -->
+  <div class="right">
+    <div class="sig-head af d2">SIGNAL ANALYSIS · 0xf3a...b12</div>
+    <div class="sig-row af d3">
+      <span class="k">Δt — hours before close</span>
+      <span class="v">48.0h <span class="chk">P0.3% ✓</span></span>
+    </div>
+    <div class="sig-row af d4">
+      <span class="k">Age — days on-chain</span>
+      <span class="v">12d <span class="chk">P0.9% ✓</span></span>
+    </div>
+    <div class="sig-row af d5">
+      <span class="k">Winning volume</span>
+      <span class="v">$77K <span class="chk">P99.8% ✓</span></span>
+    </div>
+    <div class="sig-row af d6">
+      <span class="k">α_slippage — market share</span>
+      <span class="v">8.1% <span class="chk">P99.1% ✓</span></span>
+    </div>
+    <div class="final-box af d7">
+      CRITERION MET · 4 / 4 · ● INSIDER FLAGGED
+    </div>
+  </div>
+</section>
+
+<!-- ================================================================
+     SLIDE 11 — CLOSING
+     ================================================================ -->
+<section class="slide" id="s11">
+  <div class="glow-tl"></div>
+  <div class="glow-br"></div>
+  <div class="grid-bg"></div>
+
+  <div class="inner">
+    <div class="eyebrow af d1" data-e="s11-ey">CFG DATA · Built with</div>
+    <div class="chip-wrap af d2">
+      <span class="chip">Python async</span>
+      <span class="chip">Redis Streams</span>
+      <span class="chip">PostgreSQL</span>
+      <span class="chip">R + Plumber</span>
+      <span class="chip">FastAPI</span>
+      <span class="chip">Celery Beat</span>
+      <span class="chip">WebSocket / Polygon RPC</span>
+      <span class="chip">Etherscan V2</span>
+      <span class="chip">Docker Compose</span>
+    </div>
+    <div class="divider ax d3" style="margin: 0 auto;"></div>
+    <p class="closing-q au d4" data-e="s11-q">
+      "The data was always there.<br>We just built the machine to read it."
+    </p>
+    <div class="closing-by af d5" data-e="s11-by">CFG DATA · INSIDER DETECTION SYSTEM · 2025</div>
+  </div>
+</section>
+
+<!-- ================================================================
+     JAVASCRIPT
+     ================================================================ -->
+<script>
+/* ── STATE ── */
+let cur = 0;
+let busy = false;
+let editOn = false;
+const slides = Array.from(document.querySelectorAll('.slide'));
+const dots   = Array.from(document.querySelectorAll('.dot'));
+const N = slides.length;
+const counter = document.getElementById('slide-counter');
+
+/* ── GOTO ── */
+function goto(i, fast) {
+  if (i < 0 || i >= N) return;
+  if (busy && !fast) return;
+  busy = true;
+
+  // Deactivate current
+  slides[cur].classList.remove('active');
+  dots[cur].classList.remove('on');
+
+  cur = i;
+
+  // Force animation restart by removing .active, reflow, re-add
+  const sl = slides[cur];
+  sl.classList.remove('active');
+  void sl.offsetWidth; // reflow
+  sl.classList.add('active');
+  dots[cur].classList.add('on');
+
+  const pad = String(cur + 1).padStart(2, '0');
+  counter.textContent = `${pad} / ${String(N).padStart(2, '0')}`;
+
+  setTimeout(() => { busy = false; }, 500);
+}
+
+/* ── DOTS ── */
+dots.forEach((d, i) => d.addEventListener('click', () => goto(i)));
+
+/* ── KEYBOARD ── */
+document.addEventListener('keydown', e => {
+  // Don't intercept if editing
+  if (editOn && !['Escape','s','S'].includes(e.key) && !e.ctrlKey) return;
+
+  switch (e.key) {
+    case 'ArrowRight': case 'ArrowDown': case ' ':
+      e.preventDefault(); goto(cur + 1); break;
+    case 'ArrowLeft': case 'ArrowUp':
+      e.preventDefault(); goto(cur - 1); break;
+    case 'e': case 'E':
+      if (!editOn) toggleEdit(); break;
+    case 'Escape':
+      if (editOn) toggleEdit(); break;
+  }
+  if (e.ctrlKey && (e.key === 's' || e.key === 'S')) {
+    e.preventDefault();
+    if (editOn) saveLocal();
+  }
+});
+
+/* ── WHEEL ── */
+let wheelAcc = 0;
+document.addEventListener('wheel', e => {
+  e.preventDefault();
+  wheelAcc += e.deltaY;
+  if (Math.abs(wheelAcc) > 80) {
+    goto(wheelAcc > 0 ? cur + 1 : cur - 1);
+    wheelAcc = 0;
+  }
+}, { passive: false });
+
+/* ── TOUCH ── */
+let ty0 = 0;
+document.addEventListener('touchstart', e => { ty0 = e.touches[0].clientY; }, { passive: true });
+document.addEventListener('touchend', e => {
+  const dy = ty0 - e.changedTouches[0].clientY;
+  if (Math.abs(dy) > 40) goto(dy > 0 ? cur + 1 : cur - 1);
+}, { passive: true });
+
+/* ── EDIT MODE ── */
+const editZone = document.getElementById('edit-zone');
+const editBar  = document.getElementById('edit-bar');
+
+editZone.addEventListener('click', toggleEdit);
+document.getElementById('btn-save').addEventListener('click', saveLocal);
+document.getElementById('btn-export').addEventListener('click', exportHTML);
+document.getElementById('btn-close').addEventListener('click', () => { if (editOn) toggleEdit(); });
+
+function toggleEdit() {
+  editOn = !editOn;
+  document.querySelectorAll('[data-e]').forEach(el => {
+    el.contentEditable = editOn ? 'true' : 'false';
+  });
+  editBar.classList.toggle('on', editOn);
+}
+
+function saveLocal() {
+  const data = {};
+  document.querySelectorAll('[data-e]').forEach(el => {
+    data[el.getAttribute('data-e')] = el.innerHTML;
+  });
+  localStorage.setItem('cfg-insider-v1', JSON.stringify(data));
+  const btn = document.getElementById('btn-save');
+  btn.textContent = 'SAVED ✓';
+  setTimeout(() => { btn.textContent = 'SAVE  Ctrl+S'; }, 1800);
+}
+
+function loadLocal() {
+  const raw = localStorage.getItem('cfg-insider-v1');
+  if (!raw) return;
+  try {
+    const data = JSON.parse(raw);
+    Object.entries(data).forEach(([k, v]) => {
+      const el = document.querySelector(`[data-e="${k}"]`);
+      if (el) el.innerHTML = v;
+    });
+  } catch {}
+}
+
+function exportHTML() {
+  const wasOn = editOn;
+  if (wasOn) toggleEdit();
+
+  // Turn off all contenteditable before snapshotting
+  document.querySelectorAll('[data-e]').forEach(el => { el.contentEditable = 'false'; });
+
+  const html = '<!DOCTYPE html>\n' + document.documentElement.outerHTML;
+  const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'cfgdata-insider-hunter.html';
+  a.click();
+  URL.revokeObjectURL(a.href);
+
+  if (wasOn) setTimeout(toggleEdit, 120);
+}
+
+/* ── INIT ── */
+loadLocal();
+</script>
+</body>
+</html>

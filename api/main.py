@@ -41,7 +41,12 @@ class InsiderDetectionResponse(BaseModel):
     errors: list[str] | None = None
 
 
-# --- Endpoint ---
+# --- Endpoints ---
+
+@app.get("/health")
+async def health():
+    return {"status": "ok"}
+
 
 @app.post("/insider-detection", response_model=InsiderDetectionResponse)
 async def receive_insider_detection(

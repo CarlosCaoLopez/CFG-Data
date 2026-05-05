@@ -2,137 +2,185 @@
 
 ## Distribución de capas
 
-Vamos a construir un sistema organizado en 6 capas:
+Vamos a construir un sistema organizado en 6 capas + 1 capa de orquestación:
 
 - Capa (A) Ingesta de Datos: Esta capa se encargará de leer los datos de las API de Polymarket y Polygon, según los criterios especificados, y enviarlos a la siguiente capa. Implementada en Python.
-- Capa (B) Colas REDIS: Esta capa actuará como un intermediario que recibirá los datos de la capa (A) y los enviará a la capa (C) Base de Datos. Implementada en Python.
+- Capa (B) Colas REDIS: Esta capa actuará como un intermediario que recibirá los datos de la capa (A) Ingesta de Datos y los expondrá a la capa (Q) Orchestrator. Implementada con Redis Streams.
+- Capa (Q) Orchestrator: Esta capa lee de los streams de Redis, persiste los datos en la base de datos (función T1), y despacha la tarea T2 a la capa (T) Tasks. Es un servicio independiente (no Celery).
 - Capa (C) Base de Datos: Esta capa almacenará los datos recibidos en una base de datos estructurada con varias tablas. Implementada en PostgreSQL.
-- Capa (D) Motor de Cálculo: Esta capa se encargará de procesar los datos almacenados en la base de datos y aplicar el criterio de insider para identificar posibles insiders. Implementada en R.
-- Capa (E) REST API: Esta capa se encargará de recibir las peticiones HTTP del motor de cálculo y actualizar la base de datos en consecuencia. Implementada en Python.
-- Capa (T) Tasks: Esta capa se encargará de ejecutar tareas específicas para trasladar información entre las otras capas, como mover datos de REDIS a la base de datos, calcular variables al cierre de un market, etc. Implementada en Python, con Celery para la gestión de tareas asíncronas.
+- Capa (D) Motor de Cálculo: Esta capa se encargará de procesar los datos almacenados en la base de datos y aplicar el criterio de insider para identificar posibles insiders. Implementada en R con Plumber.
+- Capa (E) REST API: Esta capa se encargará de recibir las peticiones HTTP del motor de cálculo y actualizar la base de datos en consecuencia. Implementada en Python (FastAPI).
+- Capa (T) Tasks: Esta capa se encargará de ejecutar tareas específicas para trasladar información entre las otras capas, como calcular variables al cierre de un market, publicar comandos a Redis, y limpiar datos temporales. Implementada en Python con Celery.
+- Capa (F) Dashboard: Panel de control web para visualizar markets, wallets insider, variables y el estado del pipeline. Implementada en Python (FastAPI) con templates HTML. Puerto 8002.
 
 Vamos a definir globalmente un array de strings de CATEGORIAS_DE_INTERES.
 
 ## A. Ingesta de datos
 
-Vamos a tener en primer lugar dos listeners en la capa (A) Ingesta de Datos. 
+Vamos a tener en primer lugar dos listeners en la capa (A) Ingesta de Datos.
 
-1. Un primer listener está leyendo siempre de las API de Polymarket y Polygon, según los criterios que ya están especificados en otro documento, y solo manda los datos al cierre de un market. En tiempo real, estará escuchando todos los markets con categories y tags que nos interesen (CATEGORIAS_DE_INTERES), que tenemos que decirle de antemano. Entonces este listener va a estar leyendo constantemente, pero solo va a mandar los datos al cierre de un market.
-2. El segundo listener solo va a leer de las API la información de todos los trades de las wallets que reciban como entrada. La entrada la va a recibir mediante una task. La entrada irá acompañada de las categories en las que la wallet es insider, por lo que solo mandara los trades de esa wallet en esas categories. Este listener va a estar leyendo constantemente y mandando los datos que queremos constantemente.
+1. **L1 — Listener Markets (MarketCloseListener):** está leyendo siempre de las API de Polymarket y Polygon, según los criterios especificados, y solo manda los datos al cierre de un market. Tiene 3 loops concurrentes:
+   - `_ws_discovery_loop`: escucha eventos `OrderFilled` on-chain via WebSocket de Polygon RPC. Descubre markets activos y los enriquece con tags/category via Events API.
+   - `_gamma_discovery_loop`: cada 15 min, llama a la Gamma API para descubrir markets abiertos (catch-all para markets sin trades recientes que el WebSocket no vería).
+   - `_close_detection_loop`: cada 60s, comprueba si algún market tracked ha cerrado. Si cierra, recolecta todos los trades + wallet ages, normaliza y publica el batch completo al stream `closed_markets`.
+
+2. **L2 — Listener Insiders (InsiderTradesListener):** solo va a leer de las APIs la información de todos los trades de las wallets que reciban como entrada. La entrada la recibe via stream Redis `insider_commands` (publicado por T3). La entrada va acompañada de las categories en las que la wallet es insider, por lo que solo mandará los trades de esa wallet en esas categories. Tiene 2 loops:
+   - `_command_listener_loop`: lee comandos de `insider_commands` (ADD_WALLET, UPDATE_CATEGORIES, REMOVE_WALLET) via XREADGROUP.
+   - `_trade_polling_loop`: cada 30s, por cada wallet monitorizada, consulta trades nuevos y publica al stream `insider_trades`.
+
+Existe también un **BackfillRunner** (herramienta CLI separada) que procesa mercados históricos cerrados y publica batches al stream `raw_data`.
 
 ## B. Colas REDIS
 
-El contenedor de las colas REDIS va a recibir toda la información de los listeners de la capa (A) Ingesta de Datos y los va a mandar a la capa (T) Tasks. La información que va a mandar a la capa (C) Base de Datos va a ser de dos tipos:
+Redis actúa como intermediario con 4 streams:
 
-1. Información de los markets cerrados, que va a ser enviada por el primer listener.
-2. Información de los trades de las wallets, que va a ser enviada por el segundo listener
+| Stream | Productor | Consumidor |
+|--------|-----------|------------|
+| `closed_markets` | L1 (market cerrado) | Orchestrator (Q) |
+| `raw_data` | BackfillRunner | Orchestrator (Q) |
+| `insider_trades` | L2 (trades de insider) | Orchestrator (Q) |
+| `insider_commands` | T3 (nuevo insider) | L2 |
+
+## Q. Orchestrator
+
+El `QueueOrchestrator` es un **servicio independiente** (no Celery) que:
+
+1. Lee de los streams `closed_markets`, `raw_data` e `insider_trades` mediante XREADGROUP.
+2. Ejecuta la función **T1 inline** (persistencia a BD):
+   - Para batches de mercado: `upsert_wallet` → `upsert_market` → `upsert_trade_batch` (orden FK).
+   - Para insider trades: `upsert_insider_trade_batch`.
+3. Tras persistir un batch de mercado, despacha la tarea Celery **T2** (`compute_variables`).
+4. Hace ACK de los mensajes procesados.
 
 ## C. Base de datos
 
-Va a tener 4 tablas:
+Va a tener 5 tablas más 1 tabla temporal:
 
-1. Tabla de Markets: guarda lo que se recibe a través del REDIS del listener de markets cerrados.
-   - IDMarket (pk): hexadecimal
-   - Categories: array de strings
-   - Tags: array de strings
-   - Question: string
-   - EndDate: timestamp
-   - OutcomePrizes: array de floats
-   - Volume_usdc: float
-   - Updated_at: timestamp
-   - WinningOutcome: string
+1. **Tabla de Markets:** guarda lo que se recibe a través del Orchestrator del listener de markets cerrados.
+   - `market_id` (pk): hexadecimal (conditionId)
+   - `question`: string
+   - `end_date`: timestamp
+   - `closed`: boolean
+   - `outcome_prices`: array de floats
+   - `volume_usdc`: float
+   - `categories`: array de strings
+   - `tags`: array de strings
+   - `winning_outcome`: string ('Yes' / 'No')
+   - `updated_at`: timestamp
 
-2. Tabla de Trades: guarda lo que se recibe a través del REDIS del listener de markets cerrados.
-    - IDTrade (pk): hexadecimal
-    - IDWallet: hexadecimal (fk)
-    - IDMarket: hexadecimal (fk)
-    - Side: string
-    - Outcome: string
-    - Prize: float
-    - Size_usdc: float
-    - Size_tokens: float
-    - Timestamp: timestamp
-    - Updated_at: timestamp
-    - Last_trade: boolean si es o no el último trade de ese market, antes de que cierre
+2. **Tabla de Trades:** guarda lo que se recibe a través del Orchestrator del listener de markets cerrados.
+   - `id` (pk): hexadecimal (tx_hash)
+   - `wallet_id`: hexadecimal (fk → wallets.address)
+   - `market_id`: hexadecimal (fk → markets.market_id)
+   - `side`: string (BUY/SELL)
+   - `outcome`: string (Yes/No)
+   - `prize`: float (precio 0.0–1.0)
+   - `size_usdc`: float
+   - `size_tokens`: float
+   - `timestamp`: timestamp
+   - `last_trade`: boolean — True si es el último trade de ese market antes del cierre
+   - `updated_at`: timestamp
 
-3. Tabla de Wallets: guarda lo que se recibe a través del REDIS del listener de markets cerrados.
-    - IDWallet (pk): hexadecimal
-    - First_seen_at: timestamp. Min(First_tx_polymarket, First_tx_polygon)
-    - First_tx_polymarket: timestamp
-    - First_tx_polygon: timestamp
-    - Total_volume_usdc: float
-    - Markets_traded: integer
-    - Updated_at: timestamp
-    - Insider: boolean (sí/no)
-    - Categories_insider: array de strings (categorías en las que es insider)
-    - MarketIDs_insider: array de hexadecimales (markets en los que es insider)
-  
-En la tabla de wallets habrá un index de insiders, que devuelve las filas en las que Insider = true, ordenadas por Updated_at de forma descendente, para que se pueda acceder rápidamente a los insiders más recientes.
+3. **Tabla de Wallets:** guarda lo que se recibe a través del Orchestrator del listener de markets cerrados.
+   - `address` (pk): hexadecimal
+   - `first_seen_at`: timestamp — Min(first_tx_polymarket, first_tx_polygon)
+   - `first_tx_polymarket`: timestamp
+   - `first_tx_polygon`: timestamp
+   - `total_volume_usdc`: float
+   - `markets_traded`: integer
+   - `insider`: boolean (sí/no)
+   - `categories_insider`: array de strings (categorías en las que es insider)
+   - `marketids_insider`: array de hexadecimales (markets en los que es insider)
+   - `updated_at`: timestamp
 
-4. Tabla de Insiders_Trades: guardará lo que se recibe a través del REDIS del listener de insiders.
-    - IDInsider_Trade (pk): hexadecimal
-    - IDWallet: hexadecimal (fk)
-    - IDMarket: hexadecimal (fk)
-    - Side: string
-    - Outcome: string
-    - Prize: float
-    - Size_usdc: float
-    - Size_tokens: float
-    - Timestamp: timestamp
-    - Updated_at: timestamp
+   En la tabla de wallets habrá un index de insiders (`idx_wallets_insider`) que devuelve las filas en las que `insider = true`, ordenadas por `updated_at` de forma descendente, para acceder rápidamente a los insiders más recientes.
 
-5. Tabla temporal de Closed_Market_Variables: esta tabla se calcula por la Task 2 al cierre de un market mediante un script de SQL.
-    - IDWallet (fk): hexadecimal
-    - IDMarket (fk): hexadecimal
-    - IDTrade (fk): hexadecimal
-    - Δt: float
-    - Age: float
-    - Winning_volume: float
-    - α_slippage: float
-    - H (entropía): float
+4. **Tabla de Insiders_Trades:** guardará lo que se recibe a través del Orchestrator del listener de insiders.
+   - `id` (pk): hexadecimal
+   - `wallet_id`: hexadecimal (fk → wallets.address)
+   - `market_id`: hexadecimal (fk → markets.market_id)
+   - `side`: string (BUY/SELL)
+   - `outcome`: string (Yes/No)
+   - `prize`: float
+   - `size_usdc`: float
+   - `size_tokens`: float
+   - `timestamp`: timestamp
+   - `last_trade`: boolean (default FALSE)
+   - `updated_at`: timestamp
 
-Las columnas de Updated_at de las tablas de Market y Wallets se van a actualizar cada vez que se actualice un registro de esa tabla, para tener un control de cuándo se actualizó por última vez cada registro.
+5. **Tabla temporal de Closed_Market_Variables:** esta tabla se calcula por la Task T2 al cierre de un market mediante un script SQL. Se elimina una vez el Motor D ha procesado el market.
+   - `wallet_id` (pk, fk → wallets.address): hexadecimal
+   - `market_id` (pk, fk → markets.market_id): hexadecimal
+   - **PK compuesta: (wallet_id, market_id). No hay columna IDTrade.**
+   - `delta_t`: float — tiempo en horas
+   - `age`: float — edad en días
+   - `winning_volume`: float
+   - `alpha_slippage`: float
+   - `entropy`: float
+
+Las columnas `updated_at` de Markets y Wallets se actualizan cada vez que se modifica un registro.
 
 ## D. Motor de cálculo
 
-Se encarga de procesar los datos de la capa (C) Base de Datos. La capa (T) Tasks manda de forma asíncrona los datos al motor de cálculo y se olvida. La información se puede recibir a través de un endpoint con la librería Plumber. La información que va a recibir tendrá el siguiente formato:
-    - IDWallet: hexadecimal
-    - IDMarket: hexadecimal
-    - Δt: float
-    - Age: float
-    - Winning_volume: float
-    - α_slippage: float
-    - H (entropía): float
+Se encarga de procesar los datos de la capa (C) Base de Datos. La tarea T2 dispara una petición HTTP `POST /analyze` al motor (endpoint Plumber en R) con únicamente `{"market_id": "0x..."}`. El motor **lee directamente de la BD** la tabla `closed_market_variables` filtrada por ese `market_id`; no recibe las variables como parámetros HTTP.
 
-El motor de cálculo tendrá una función que se ejecuta cada vez que recibe datos nuevos y hará:
+El motor de cálculo hace:
 
-1. Ajuste de bondad de distribucion para cada columna (solo de vez en cuando).
-2. Obtener región crítica para cada variable (Δt, Age, Winning_volume, α_slippage, H).
-3. Ejecutar el **criterio de insider**. De momento, por ejemplo un criterio será que una wallet esté en las 5 region críticas de las 5 variables, pero esto se puede ir ajustando.
-4. Devolver como resultado el conjunto IDMarket, IDWallet, Categories_insider, MarketIDs_insider. Cuando el motor termina, manda una petición HTTP al módulo (E) REST API. Si no hay ningún insider, el IDMarket, para que luego se puedan eliminar los trades por una task. Se pueden mandar por separado el IDMarket y luego el resto de datos, eso ya es cuestión de cómo se quiera implementar.
+1. **Percentiles empíricos** para obtener umbrales (no ajuste paramétrico de distribuciones):
+   - `delta_t`: percentil 1% (trades más cercanos al cierre)
+   - `age`: percentil 1% (wallets más jóvenes)
+   - `winning_volume`: percentil 99% (mayor volumen ganador)
+   - `alpha_slippage`: percentil 99% (mayor slippage)
+   - `entropy`: percentil 1% — **actualmente DESHABILITADO** (`ENTROPY_ENABLED = FALSE`). Se activará cuando haya datos de múltiples categorías suficientes.
+
+2. **Criterio de insider:** de momento, una wallet está en las **4 regiones críticas** simultáneamente (delta_t, age, winning_volume, alpha_slippage). Cuando se habilite la entropía serán 5.
+
+3. **Resultado:** si hay insiders, hace `POST /insider-detection` a la capa (E) REST API con el formato:
+   ```json
+   {
+     "market_id": "0x...",
+     "wallets": [
+       {"wallet": "0x...", "categories_insider": [...], "command_type": "ADD_WALLET"}
+     ]
+   }
+   ```
+   Si no hay insiders, el endpoint E no es llamado; la limpieza de la tabla CMV la realizará T4 periódico.
 
 ## E. REST API
 
-La función de este módulo es recibir las peticiones HTTP del motor de cálculo y actualizar la tabla de Wallets de la capa (C) Base de Datos, poniendo Insider = true, actualizando las Categories_insider y MarketIDs_insider, y actualizando el Updated_at. Además, cada vez que se actualice un registro de la tabla de Wallets, se va a actualizar también el registro de la tabla de Markets correspondiente a cada market en el que esa wallet es insider, para actualizar su Updated_at.
+La función de este módulo es recibir las peticiones HTTP del motor de cálculo y:
 
-También borrará la tabla de Closed_Market_Variables de la capa (C) Base de Datos, para eliminar los datos temporales que ya no necesitamos, una vez se reciba la llamada de (D) Motor de Cálculo de que se ha terminado de procesar un market.
+1. Actualizar la tabla de Wallets: `insider = true`, actualizar `categories_insider` y `marketids_insider`.
+2. Disparar la tarea **T3** por cada wallet insider detectada.
+3. Borrar las filas de `closed_market_variables` para ese `market_id` (limpieza inline, síncrona).
+4. Disparar la tarea **T4 reactivo** (`cleanup_market`) para eliminar los trades de ese `market_id`.
 
 ## T. Tasks
 
-Vamos a tener diversas Tasks de Celery que ejecutan las tareas de trasladar información entre los componentes anteriores:
+Diversas Tasks de Celery que ejecutan las tareas de trasladar información entre los componentes anteriores:
 
-1. Task 1 (T1): manda todo lo que llega en el REDIS a la (C) Base de Datos, ya que no solo tienen por qué ser markets cerrados, sino que también pueden ser trades de insiders. Mueve información de la capa (B) Colas REDIS a la capa (C) Base de Datos.
-   
-2. Task 2 (T2): al cierre de un market, llama a un script de SQL que calcula unas variables. Solo traba en (C) Base de Datos, no mueve información a otra capa. Estas variables son las que se almacenan en la tabla de Closed_Market_Variables. Para que la (D) Capa de Cálculo reciba el formato especificado de IDWallet, IDMarket, Δt, Age, Winning_volume, α_slippage, H, se obtendrán estas cuentas directamente en el SQL, ya que está optimizado para hacer estos cálculos sencillos. Estas cuentas son:
-    - Δt = Market.EndDate - Trade.Timestamp. Se mide en horas.
-    - Age = Máximo(1, Market.EndDate - Wallet.First_seen_at). Se mide en días.
-    - Winning_volume = Suma(Trade.Size_usdc * Trade.Prize * (Trade.Outcome == Market.WinningOutcome)), donde (Trade.Outcome == Market.WinningOutcome) = 1 si el outcome del trade es el mismo que el winning outcome del market, y -1 en caso contrario. Se mide en USDC.
-    - α_slippage = 0, si Trade.Prize = 0. Además, α_slippage = (Trade.Prize * (1 + Trade.Size_usdc / Market.Volume_usdc) - Trade.Prize) / Trade.Prize, si Trade.Prize > 0. Se mide en porcentaje, entre 0 y 1.
-    - H (entropía) = - Suma(P * log(P)), siendo P = volumen de la wallet en una cierta categoría / volumen total de la wallet, para cada categoría en la que ha apostado la wallet.
+1. **T1 — inline en Orchestrator (Q):** no es una tarea Celery. El Orchestrator lo ejecuta directamente al leer de Redis: persiste wallets, markets, trades e insider_trades en la BD (en ese orden de FK). Tras persistir un batch de mercado, despacha T2.
 
-3. Task 3 (T3): cada vez que se fije con Insider = true una wallet en la tabla de Wallets, o se añada una Categories_insider a una fila de un insider en esta misma tabla, manda la información necesaria al listener de insiders de la capa (A) Ingesta de Datos, para que este listener pueda empezar a leer los trades de esa wallet en las categories en las que es insider. Mueve información de la capa (C) Base de Datos a la capa (A) Ingesta de Datos.
-   
-4. Task 4 (T4): cuando la capa (E) recibe la petición HTTP del (D) Motor de Cálculo, significa que ya se ha terminado de procesar el market con IDMarket. Esta Task debe eliminar de la (C) Base de Datos todos los trades de la tabla de Trades asociados con el IDMarket que ya se ha procesado, no queremos guardar más esta información.
+2. **Task T2 (`compute_variables`):** al cierre de un market, llama al script SQL `compute_variables.sql` que calcula las variables y las inserta en `closed_market_variables`. Luego despacha la tarea D (`run_market_inference`). Solo trabaja en (C) Base de Datos. Las fórmulas son:
+
+   - **Δt** = `MIN(Market.EndDate - Trade.Timestamp)` para cada wallet — se toma el trade más cercano al cierre. Se mide en **horas**.
+
+   - **Age** = `MAX(1, Market.EndDate - Wallet.first_seen_at)`. Se mide en **días**.
+
+   - **Winning_volume** = `SUM(Trade.Size_usdc × Trade.Prize × side_sign × outcome_sign)` donde:
+     - `side_sign` = +1 si BUY, -1 si SELL
+     - `outcome_sign` = +1 si `Trade.Outcome == Market.WinningOutcome`, -1 si no
+     - Se mide en **USDC**.
+
+   - **α_slippage** = `SUM(size_usdc WHERE prize > 0) / Market.Volume_usdc` — simplificación algebraica de `(Prize × (1 + Size_usdc / Volume) - Prize) / Prize`. 0 si `Market.Volume_usdc = 0`. Se mide entre 0 y 1.
+
+   - **H (entropía)** = `-SUM(P × ln(P))` donde `P = volumen de la wallet en una categoría / volumen total de la wallet`, para cada categoría en la que ha apostado. Calculado sobre todos los trades históricos de la wallet (no solo los del market actual).
+
+3. **Task T3 (`publish_insider_command`):** cada vez que la capa (E) detecta un insider, publica el comando necesario al stream `insider_commands` para que L2 empiece a monitorizar esa wallet. Mueve información de (E) a la capa (A) Ingesta de Datos.
+
+4. **Task T4 (`cleanup_market`) — reactivo:** cuando (E) recibe la petición HTTP de (D), despacha esta tarea para eliminar de (C) todos los trades de la tabla `trades` asociados al `market_id` procesado (y sus filas CMV si quedan). Orden de borrado: CMV primero (FK), luego trades.
+
+5. **Task T4 (`cleanup_stale_trades`) — periódico:** tarea Celery Beat que se ejecuta **cada hora**. Elimina de la tabla `trades` todos los registros con `updated_at < NOW() - 1h` y sus `closed_market_variables` asociadas. Para mercados que no llegaron a ser procesados por D o cuyo T4 reactivo no fue disparado.
 
 ---
 
@@ -140,44 +188,63 @@ Vamos a tener diversas Tasks de Celery que ejecutan las tareas de trasladar info
 
 ```
 ┌─────────────────┐     ┌─────────────────┐
-│ Listener Markets│     │Listener Insiders│◄────────┐
-└────────┬────────┘     └────────┬────────┘         │
-         │                       │                  │
-         └───────────┬───────────┘                  │
-                     ▼                              │
-              ┌─────────────┐                       │
-              │    REDIS    │                       │
-              └──────┬──────┘                       │
-                     │                              │
-                     ▼                              │
-              ┌─────────────┐                       │
-              │     T1      │                       │
-              └──────┬──────┘                       │
-                     │                              │
-                     ▼                              │
-              ┌─────────────┐                       │
-┌─────────────│     BD      │◄──────┐               │
-│             └──────┬──────┘       │               │
-│                    │              │               │
-│        ┌───────────│              │               │
-│        ▼           ▼              │               │
-│  ┌─────────┐ ┌─────────┐ ┌─────────┐              │
-│  │   T2    │ │   T3    │ │   T4    │              │
-│  └─────────┘ └────┬────┘ └──────▲──┘              │
-└───┐               │             │                 │
-    │               └─────────────┼─────────────────┘
-    ▼                             │
-  ┌───────────────┐               │
-  │Motor Cálculo  │               │
-  └───────┬───────┘               │
-          │                       │
-          ▼                       │
-┌───────────────┐                 │
-│   REST API    │─────────────────┘
-└───────────────┘
-``` 
+│   L1 Markets    │     │  L2 Insiders    │◄──────────────────────┐
+│ (3 loops: WS,   │     │ (2 loops: cmds  │                       │
+│  Gamma, close)  │     │  + polling)     │                       │
+└────────┬────────┘     └────────┬────────┘                       │
+         │ closed_markets        │ insider_trades                  │
+         │ raw_data (backfill)   │                                 │
+         └───────────┬───────────┘                                 │
+                     ▼                                             │
+              ┌─────────────┐   4 streams:                         │
+              │    REDIS    │   closed_markets                     │
+              │    (B)      │   raw_data                           │
+              │             │   insider_trades                     │
+              │             │   insider_commands ─────────────────►│
+              └──────┬──────┘                                       │
+                     │                                             │
+                     ▼                                             │
+              ┌─────────────┐                                       │
+              │ Orchestrator│  T1 inline                           │
+              │    (Q)      │  (upsert wallet/market/trades)       │
+              └──────┬──────┘                                       │
+                     │ dispatch T2                                 │
+                     ▼                                             │
+              ┌─────────────┐                                       │
+┌─────────────│     BD      │◄──────┐                              │
+│             │     (C)     │       │                              │
+│             └──────┬──────┘       │                              │
+│                    │              │                              │
+│        ┌───────────┘              │                              │
+│        ▼                          │                              │
+│  ┌─────────┐                      │                              │
+│  │   T2    │ compute_variables    │                              │
+│  │(Celery) │ SQL + dispatch D     │                              │
+└──►         │                      │                              │
+   └────┬────┘                      │                              │
+        │ POST /analyze             │                              │
+        ▼                           │                              │
+  ┌───────────────┐                 │                              │
+  │ Motor Cálculo │                 │                              │
+  │    (D / R)    │                 │                              │
+  │ Percentiles   │                 │                              │
+  │ empíricos     │                 │                              │
+  └───────┬───────┘                 │                              │
+          │ POST /insider-detection │                              │
+          ▼                         │                              │
+  ┌───────────────┐                 │                              │
+  │   REST API    │─────────────────┘                              │
+  │     (E)       │ upsert wallets, delete CMV,                    │
+  │               │ dispatch T3 ──────────────────────────────────►│
+  └───────┬───────┘ dispatch T4 reactivo                           │
+          │                                                        │
+          ▼
+  ┌───────────────┐
+  │  Dashboard    │
+  │    (F)        │
+  │  puerto 8002  │
+  └───────────────┘
 
-
-
-
-
+T4 periódico (Celery Beat, cada hora):
+  cleanup_stale_trades() → DELETE trades + CMV con updated_at < NOW()-1h
+```
