@@ -118,6 +118,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.inference
+      network: host
     env_file: .env
     environment:
       - POSTGRES_HOST=postgres

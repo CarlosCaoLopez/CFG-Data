@@ -2,25 +2,20 @@
 # Uses rocker/tidyverse (dplyr, httr, jsonlite pre-installed) + Posit Package Manager
 # for pre-compiled Linux binaries — avoids source compilation on every build.
 
-FROM rocker/tidyverse:4.4
+FROM r-base:4.4.0
 
-# System dependencies required by RPostgres and fitdistrplus
+# System dependencies required by RPostgres, plumber, and fitdistrplus
 RUN apt-get update && apt-get install -y \
     libpq-dev \
     libsodium-dev \
+    libssl-dev \
+    libcurl4-openssl-dev \
+    libxml2-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Install remaining packages.
-# On x86_64: Posit Package Manager serves pre-compiled binaries (fast).
-# On ARM64 (e.g. Raspberry Pi): falls back to CRAN source compilation automatically.
 RUN R -e " \
-  arch <- Sys.info()[['machine']]; \
-  repo <- if (arch == 'x86_64') \
-    'https://packagemanager.posit.co/cran/__linux__/noble/latest' \
-  else \
-    'https://cloud.r-project.org'; \
-  options(repos = c(REPO = repo)); \
-  install.packages(c('plumber', 'RPostgres', 'fitdistrplus', 'MASS'), Ncpus = 4) \
+  options(repos = c(CRAN = 'https://cloud.r-project.org')); \
+  install.packages(c('tidyverse', 'plumber', 'RPostgres', 'fitdistrplus', 'MASS'), Ncpus = 4) \
 "
 
 WORKDIR /app
