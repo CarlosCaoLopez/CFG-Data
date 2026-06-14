@@ -105,6 +105,98 @@ class RawDataStream:
             )
             raise
     
+    async def claim_stale(
+        self,
+        consumer_group: str,
+        consumer_name: str,
+        min_idle_ms: int = 600000,
+        count: int = 10,
+    ) -> List[tuple[str, MarketDataBatch]]:
+        """
+        Reclama mensajes que llevan pendientes (entregados pero sin ACK) más de
+        min_idle_ms y los reasigna a este consumidor para reprocesarlos.
+
+        Necesario porque read() usa XREADGROUP con '>', que solo entrega mensajes
+        nuevos: los que quedan huérfanos en la PEL (p.ej. si el orchestrator muere
+        a mitad de un batch) nunca se vuelven a leer sin un XCLAIM/XAUTOCLAIM
+        explícito. XAUTOCLAIM transfiere la propiedad Y devuelve el cuerpo del
+        mensaje, así que el llamante puede procesarlo por la vía normal y ACKearlo.
+
+        Args:
+            consumer_group: Nombre del grupo de consumidores
+            consumer_name: Consumidor al que se reasignan los mensajes
+            min_idle_ms: Idle mínimo para reclamar (default: 10 min). Evita robar
+                mensajes que se están procesando ahora mismo.
+            count: Máximo de mensajes a reclamar por llamada
+
+        Returns:
+            Lista de tuplas (message_id, MarketDataBatch), mismo formato que read().
+        """
+        try:
+            # XAUTOCLAIM stream group consumer min-idle-time start [COUNT n]
+            # redis-py devuelve [next_cursor, claimed] o [next_cursor, claimed, deleted]
+            result = await self.redis.xautoclaim(
+                name=self.stream_name,
+                groupname=consumer_group,
+                consumername=consumer_name,
+                min_idle_time=min_idle_ms,
+                start_id="0-0",
+                count=count,
+            )
+        except Exception as e:
+            logger.error(
+                "error_claiming_stale",
+                stream=self.stream_name,
+                error=str(e),
+            )
+            return []
+
+        # Normaliza el retorno de redis-py, que varía entre versiones:
+        #   - [(id, fields), ...]                      (solo mensajes)
+        #   - (cursor, [(id, fields), ...])            (cursor + mensajes)
+        #   - (cursor, [(id, fields), ...], [deleted]) (cursor + mensajes + borrados)
+        # El cursor es un ID escalar (str/bytes); los mensajes son 2-tuplas.
+        if (
+            isinstance(result, (list, tuple))
+            and len(result) >= 2
+            and isinstance(result[0], (str, bytes))
+            and isinstance(result[1], (list, tuple))
+        ):
+            claimed = result[1]
+        else:
+            claimed = result or []
+
+        results = []
+        for message_id, data in claimed:
+            mid = message_id.decode() if isinstance(message_id, bytes) else message_id
+            try:
+                if not data or b'payload' not in data:
+                    # Mensaje recortado/borrado del stream pero aún en la PEL:
+                    # se ACKea para sacarlo y que no se reclame eternamente.
+                    raise ValueError("message has no payload (trimmed/deleted)")
+                batch = MarketDataBatch.model_validate_json(data[b'payload'])
+                results.append((mid, batch))
+            except Exception as e:
+                logger.error(
+                    "stale_message_undecodable",
+                    stream=self.stream_name,
+                    message_id=mid,
+                    error=str(e),
+                )
+                await self.redis.xack(self.stream_name, consumer_group, mid)
+
+        if results:
+            logger.warning(
+                "stale_messages_reclaimed",
+                stream=self.stream_name,
+                consumer_group=consumer_group,
+                consumer_name=consumer_name,
+                count=len(results),
+                min_idle_ms=min_idle_ms,
+            )
+
+        return results
+
     async def ack(self, consumer_group: str, message_id: str) -> int:
         """
         Marca un mensaje como procesado.

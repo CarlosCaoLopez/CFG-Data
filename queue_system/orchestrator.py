@@ -4,6 +4,7 @@
 # T1 inline: persists InsiderTradeData (insider trades) to BD.
 
 import asyncio
+import time
 from datetime import datetime, UTC
 
 from queue_system.streams.raw_data_stream import RawDataStream
@@ -84,6 +85,10 @@ class QueueOrchestrator:
         # Metrics
         self._batches_processed = 0
         self._errors = 0
+
+        # Throttle del barrido de reclaim (XAUTOCLAIM). 0.0 = barrido en el
+        # primer ciclo, que recupera huérfanos dejados por un reinicio previo.
+        self._last_reclaim = 0.0
 
     async def setup(self) -> None:
         """
@@ -203,6 +208,11 @@ class QueueOrchestrator:
             try:
                 all_batches = await self._read_all_streams(batch_size)
 
+                # Recupera batches huérfanos en la PEL (read() solo lee '>').
+                # Throttled internamente; se procesan por la misma vía + ACK.
+                stale_batches = await self._reclaim_stale_batches()
+                all_batches = stale_batches + all_batches
+
                 if not all_batches:
                     continue
 
@@ -275,6 +285,57 @@ class QueueOrchestrator:
                 )
                 self._errors += 1
                 await asyncio.sleep(5)
+
+    async def _reclaim_stale_batches(
+        self,
+    ) -> list[tuple[RawDataStream, str, 'MarketDataBatch']]:
+        """
+        Reclaim orphaned messages (delivered but never ACKed) from the market
+        input streams and return them so they get reprocessed.
+
+        Throttled to run at most every config.reclaim_interval_seconds. Only
+        messages idle longer than config.reclaim_min_idle_ms are claimed, so
+        batches currently being processed are never stolen.
+
+        Returns list of (source_stream, message_id, batch), same shape as
+        _read_all_streams.
+        """
+        now = time.monotonic()
+        if now - self._last_reclaim < self.config.reclaim_interval_seconds:
+            return []
+        self._last_reclaim = now
+
+        input_streams = [self.raw_data_stream]
+        if self.closed_markets_stream:
+            input_streams.append(self.closed_markets_stream)
+
+        reclaimed: list[tuple[RawDataStream, str, 'MarketDataBatch']] = []
+        for stream in input_streams:
+            try:
+                claimed = await stream.claim_stale(
+                    consumer_group=self.consumer_group,
+                    consumer_name=self.consumer_name,
+                    min_idle_ms=self.config.reclaim_min_idle_ms,
+                    count=self.config.orchestrator_batch_size,
+                )
+            except Exception as e:
+                self.logger.error(
+                    "reclaim_failed",
+                    stream=stream.stream_name,
+                    error=str(e),
+                )
+                continue
+
+            for message_id, batch in claimed:
+                reclaimed.append((stream, message_id, batch))
+
+        if reclaimed:
+            self.logger.info(
+                "stale_batches_reclaimed",
+                count=len(reclaimed),
+            )
+
+        return reclaimed
 
     async def _read_all_streams(
         self, batch_size: int

@@ -49,5 +49,10 @@ class QueueConfig(BaseSettings):
     orchestrator_batch_size: int = 10
     orchestrator_poll_interval_seconds: float = 1.0
 
+    # Reclaim de pendientes huérfanos (XAUTOCLAIM)
+    # Recupera batches que quedaron sin ACK (p.ej. tras un crash del orchestrator)
+    reclaim_min_idle_ms: int = 600000  # 10 min: no toca mensajes en proceso
+    reclaim_interval_seconds: float = 120.0  # frecuencia del barrido de reclaim
+
     # Dead Letter Queue
     dlq_retention_days: int = 30

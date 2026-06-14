@@ -201,6 +201,11 @@ class BackfillRunner:
             use_polygonscan=self.use_polygonscan,
         )
 
+        # 3b. Enrich market with category/tags from the Events API.
+        # ?closed=true returns them only intermittently; without this the
+        # normalizer has nothing to derive the category from → "unknown".
+        market = await self.markets_collector.enrich_market_with_event_data(market)
+
         # 4. Normalize all data
         batch = self.normalizer.normalize_batch(
             market_raw=market,

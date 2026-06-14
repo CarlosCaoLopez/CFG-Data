@@ -305,6 +305,64 @@ class MarketsCollector:
             )
             return None
 
+    async def enrich_market_with_event_data(self, market: dict) -> dict:
+        """
+        Enrich a market dict in-place with category + tags from the Events API.
+
+        The /markets endpoint omits category/tags for some queries, and even
+        ?closed=true (used by the backfill) returns them only intermittently.
+        The Events API (GET /events/{id}) returns tags for all markets and
+        category for closed ones, so it's the reliable source.
+
+        No-op (no extra HTTP call) if the market already carries both a
+        category and tags in events[0] — avoids doubling Gamma calls when the
+        /markets response was already complete.
+
+        Args:
+            market: Raw market dict (must contain events[0].id to enrich)
+
+        Returns:
+            The same market dict, possibly enriched with category/tags.
+        """
+        has_category = bool(market.get("category"))
+        events = market.get("events")
+        has_tags = (
+            isinstance(events, list)
+            and events
+            and isinstance(events[0], dict)
+            and bool(events[0].get("tags"))
+        )
+        if has_category and has_tags:
+            return market
+
+        event_id = None
+        if isinstance(events, list) and events and isinstance(events[0], dict):
+            event_id = events[0].get("id")
+        if not event_id:
+            return market
+
+        event_data = await self.fetch_event_by_id(str(event_id))
+        if not event_data:
+            return market
+
+        if not has_category:
+            event_category = event_data.get("category")
+            if event_category:
+                market["category"] = event_category
+
+        event_tags = event_data.get("tags", [])
+        if event_tags and market.get("events"):
+            market["events"][0]["tags"] = event_tags
+
+        logger.debug(
+            "market_enriched_from_events_api",
+            condition_id=market.get("conditionId", "")[:20] + "...",
+            category=market.get("category"),
+            tags_count=len(event_tags) if event_tags else 0,
+        )
+
+        return market
+
     async def fetch_market_by_token_id(self, token_id: str) -> dict | None:
         """
         Fetch a market by its CLOB token ID (outcome token).
@@ -352,40 +410,9 @@ class MarketsCollector:
                 )
                 return None
 
-            # Step 2: Get event_id and fetch from Events API for tags/category
-            events = market.get("events", [])
-            event_id = None
-            if events and isinstance(events, list) and len(events) > 0:
-                event_id = events[0].get("id")
-
-            if event_id:
-                event_data = await self.fetch_event_by_id(str(event_id))
-
-                if event_data:
-                    # Merge category from Events API into market
-                    event_category = event_data.get("category")
-                    if event_category:
-                        market["category"] = event_category
-
-                    # Merge tags into events[0] so normalizer can extract them
-                    event_tags = event_data.get("tags", [])
-                    if event_tags and market.get("events"):
-                        market["events"][0]["tags"] = event_tags
-
-                    logger.debug(
-                        "market_enriched_from_events_api",
-                        token_id=token_id[:20] + "...",
-                        condition_id=market.get("conditionId", "")[:20] + "...",
-                        category=market.get("category"),
-                        tags_count=len(event_tags),
-                    )
-            else:
-                logger.debug(
-                    "no_event_id_for_market",
-                    token_id=token_id[:20] + "...",
-                )
-
-            return market
+            # Step 2: Enrich with tags/category from the Events API
+            # (clob_token_ids query never returns them).
+            return await self.enrich_market_with_event_data(market)
 
         except Exception as e:
             logger.warning(
