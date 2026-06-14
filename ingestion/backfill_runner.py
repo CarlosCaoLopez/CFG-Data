@@ -213,6 +213,15 @@ class BackfillRunner:
             wallet_ages_raw=wallet_ages_raw,
         )
 
+        # 4b. Compute winning_outcome + mark last_trade (mirrors L1
+        # _handle_market_close). The normalizer leaves these unset, so without
+        # this step every backfilled market gets winning_outcome=NULL and all
+        # trades last_trade=False.
+        batch.metadata.winning_outcome = self.normalizer.compute_winning_outcome(
+            batch.metadata.outcome_prices
+        )
+        self.normalizer.mark_last_trade(batch.trades)
+
         # 5. Publish to Redis (unless dry run)
         if not self.dry_run:
             batch_id = await publisher.publish_market_batch(batch)

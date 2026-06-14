@@ -11,6 +11,20 @@ class DatabaseManager:
     def __init__(self, session: AsyncSession):
         self.session = session
 
+    async def market_exists(self, market_id: str) -> bool:
+        """
+        Returns True if a market row already exists. Used as an idempotency
+        guard: the orchestrator (T1) is the only writer of `markets`, so an
+        existing row means this market's batch was already processed and its
+        per-wallet stats (markets_traded/total_volume_usdc) were already
+        accumulated — re-processing must not accumulate them again.
+        """
+        result = await self.session.execute(
+            sa_text("SELECT 1 FROM markets WHERE market_id = :mid LIMIT 1"),
+            {"mid": market_id},
+        )
+        return result.first() is not None
+
     async def upsert_market(self, market_data: dict):
         """
         Inserts or updates a market, avoiding duplicates
@@ -47,8 +61,14 @@ class DatabaseManager:
         stmt = stmt.on_conflict_do_update(
             index_elements=['address'],
             set_={
-                "total_volume_usdc": stmt.excluded.total_volume_usdc,
-                "markets_traded": stmt.excluded.markets_traded,
+                "total_volume_usdc": sa_text(
+                    "COALESCE(wallets.total_volume_usdc, 0) + "
+                    "COALESCE(EXCLUDED.total_volume_usdc, 0)"
+                ),
+                "markets_traded": sa_text(
+                    "COALESCE(wallets.markets_traded, 0) + "
+                    "COALESCE(EXCLUDED.markets_traded, 0)"
+                ),
                 "insider": stmt.excluded.insider,
                 "categories_insider": sa_text(
                     "ARRAY(SELECT DISTINCT unnest("

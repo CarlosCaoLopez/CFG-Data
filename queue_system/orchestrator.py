@@ -399,12 +399,19 @@ class QueueOrchestrator:
         }
 
     @staticmethod
-    def _wallet_to_dict(age: RawWalletAge) -> dict:
+    def _wallet_to_dict(age: RawWalletAge, volume_usdc: float = 0.0) -> dict:
+        # markets_traded/total_volume_usdc are accumulated by upsert_wallet.
+        # Each batch is one market, so a wallet that traded here contributes 1
+        # market and its volume in this market. Trades are deleted by T4, so
+        # these lifetime totals must be accumulated at ingest time.
+        traded_here = volume_usdc > 0.0
         return {
             "address":            age.wallet,
             "first_seen_at":      age.first_tx_polymarket or age.first_tx_polygon,
             "first_tx_polymarket": age.first_tx_polymarket,
             "first_tx_polygon":   age.first_tx_polygon,
+            "total_volume_usdc":  volume_usdc,
+            "markets_traded":     1 if traded_here else 0,
             "updated_at":         datetime.now(UTC),
         }
 
@@ -443,8 +450,23 @@ class QueueOrchestrator:
             db = DatabaseManager(session)
 
             # 1. Upsert wallets (small n, ~20-50 per batch; loop is acceptable)
+            # Idempotency guard: only accumulate markets_traded/total_volume_usdc
+            # the first time this market is seen. On re-delivery the market row
+            # already exists, so we skip the accumulation (volume 0 / markets 0)
+            # to avoid double-counting while still refreshing wallet ages.
+            already_processed = await db.market_exists(batch.metadata.market_id)
+
+            volume_by_wallet: dict[str, float] = {}
+            if not already_processed:
+                # Aggregate per-wallet volume in this market from the batch trades.
+                for t in batch.trades:
+                    volume_by_wallet[t.wallet] = (
+                        volume_by_wallet.get(t.wallet, 0.0) + t.size_usdc
+                    )
             for age in batch.wallet_ages.values():
-                await db.upsert_wallet(self._wallet_to_dict(age))
+                await db.upsert_wallet(
+                    self._wallet_to_dict(age, volume_by_wallet.get(age.wallet, 0.0))
+                )
 
             # 2. Upsert market
             await db.upsert_market(self._market_to_dict(batch.metadata))
