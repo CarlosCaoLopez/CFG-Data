@@ -372,7 +372,7 @@ ingestion/stats_server.py     # Mini FastAPI interna (puerto 9001)
 2. dashboard/main.py → templates.TemplateResponse("pipeline.html", ...)
 3. Jinja2 renderiza pipeline.html extendiendo base.html
 4. Browser recibe HTML + inicia SSE via EventSource('/api/sse/live')
-5. Alpine.js ejecuta x-init="load(); setInterval(load, 8000)"
+5. Alpine.js ejecuta x-init="load(); setInterval(() => load(), 8000)"
 
 6. load() → fetch('/api/pipeline')
 7. dashboard/routers/pipeline.py → asyncio.gather(3 coroutines en paralelo):
@@ -546,6 +546,31 @@ Chart.js solo renderiza si `top_categories` tiene al menos 1 elemento. Si no hay
 ```bash
 curl http://localhost:8002/api/overview | python -m json.tool | grep -A10 top_categories
 ```
+
+---
+
+### Error en consola: `TypeError: this.$nextTick is not a function`
+
+Síntoma (visible en la consola del browser, normalmente en Overview):
+```
+(índice):298 TypeError: this.$nextTick is not a function
+    at load ((índice):297:14)
+```
+
+**Causa:** pasar la referencia **desnuda** de un método del componente a `setInterval`:
+```html
+<!-- ❌ MAL -->
+<div x-data="overviewPage()" x-init="load(); setInterval(load, 15000)">
+```
+La primera llamada `load()` corre con el `this` ligado al proxy reactivo de Alpine, pero `setInterval(load, ...)` guarda la función **sin** ese binding. Cuando el intervalo dispara, `this` ya no es el componente Alpine, así que cualquier *magic* (`this.$nextTick`, `this.$refs`, …) o propiedad (`this.d`, `this.ts`) revienta.
+
+**Solución:** envolver la llamada en una arrow function para preservar el contexto:
+```html
+<!-- ✅ BIEN -->
+<div x-data="overviewPage()" x-init="load(); setInterval(() => load(), 15000)">
+```
+
+Aplica a cualquier template que use `setInterval` con auto-refresh (`overview.html`, `pipeline.html`). Regla general: **nunca pasar `metodoDelComponente` directamente a `setInterval`/`setTimeout`; siempre `() => metodoDelComponente()`.**
 
 ---
 
