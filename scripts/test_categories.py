@@ -217,10 +217,111 @@ def test_alert_with_category():
     return alert
 
 
+async def test_enrich_market_with_event_data():
+    """
+    Cubre el path de backfill: market SIN category/tags en la respuesta de
+    /markets → enrich_market_with_event_data los trae de la Events API →
+    el normalizer resuelve la category.
+
+    Mockea fetch_event_by_id, así que no hace HTTP real (test unitario).
+    """
+    print("\n" + "=" * 60)
+    print("TEST 6: enrich_market_with_event_data deriva category")
+    print("=" * 60)
+
+    from ingestion.collectors.markets_collector import MarketsCollector
+
+    normalizer = DataNormalizer(categorias_de_interes=["Sports", "Crypto"])
+    collector = MarketsCollector()
+
+    # --- Caso A: Events API devuelve category directamente (mercado cerrado) ---
+    calls = {"count": 0}
+
+    async def fake_event_with_category(event_id):
+        calls["count"] += 1
+        return {
+            "id": event_id,
+            "category": "Crypto",
+            "tags": [{"id": "1", "label": "Bitcoin", "slug": "bitcoin"}],
+        }
+
+    collector.fetch_event_by_id = fake_event_with_category
+
+    raw_market_a = {
+        "conditionId": "0xclosedmarket",
+        "question": "Will BTC reach $100K?",
+        "endDate": "2026-12-31T00:00:00Z",
+        "volume": "500000",
+        "closed": True,
+        "events": [{"id": "event-99"}],  # solo el id, sin category ni tags
+    }
+    enriched_a = await collector.enrich_market_with_event_data(raw_market_a)
+    metadata_a = normalizer.normalize_market(enriched_a)
+
+    print(f"  [A] Category: {metadata_a.category}  Tags: {metadata_a.tags}")
+    assert calls["count"] == 1, "Debe llamar a la Events API cuando faltan category/tags"
+    assert metadata_a.category == "Crypto", f"Esperaba 'Crypto', got '{metadata_a.category}'"
+    assert metadata_a.tags and "Bitcoin" in metadata_a.tags
+
+    # --- Caso B: Events API sin category pero con tag que matchea un interés ---
+    async def fake_event_no_category(event_id):
+        return {
+            "id": event_id,
+            # sin "category"
+            "tags": [
+                {"id": "1", "label": "NBA", "slug": "nba"},
+                {"id": "2", "label": "Sports", "slug": "sports"},
+            ],
+        }
+
+    collector.fetch_event_by_id = fake_event_no_category
+
+    raw_market_b = {
+        "conditionId": "0xnocategory",
+        "question": "Will the Lakers win?",
+        "endDate": "2026-06-15T00:00:00Z",
+        "volume": "120000",
+        "closed": True,
+        "events": [{"id": "event-100"}],
+    }
+    enriched_b = await collector.enrich_market_with_event_data(raw_market_b)
+    metadata_b = normalizer.normalize_market(enriched_b)
+
+    print(f"  [B] Category: {metadata_b.category}  Tags: {metadata_b.tags}")
+    # Solo "Sports" está en CATEGORIAS_DE_INTERES → category derivada de ese tag
+    assert metadata_b.category == "Sports", f"Esperaba 'Sports', got '{metadata_b.category}'"
+    assert metadata_b.tags and "NBA" in metadata_b.tags
+
+    # --- Caso C: idempotencia — ya trae category + tags → NO llama Events API ---
+    calls_c = {"count": 0}
+
+    async def should_not_be_called(event_id):
+        calls_c["count"] += 1
+        return None
+
+    collector.fetch_event_by_id = should_not_be_called
+
+    raw_market_c = {
+        "conditionId": "0xcomplete",
+        "question": "Already enriched",
+        "endDate": "2026-06-15T00:00:00Z",
+        "volume": "80000",
+        "closed": True,
+        "category": "Sports",
+        "events": [{"id": "event-101", "tags": [{"label": "NFL", "slug": "nfl"}]}],
+    }
+    await collector.enrich_market_with_event_data(raw_market_c)
+
+    print(f"  [C] Llamadas a Events API (esperado 0): {calls_c['count']}")
+    assert calls_c["count"] == 0, "No debe llamar a Events API si ya hay category+tags"
+
+    print("\n  ✅ Test passed: enrich_market_with_event_data deriva/resuelve category")
+
+
 async def test_real_api_categories():
     """Test with real Polymarket API data (optional)"""
     print("\n" + "=" * 60)
-    print("TEST 6: Real API category extraction (optional)")
+    print("TEST 7: Real API category extraction (optional)")
     print("=" * 60)
 
     try:
@@ -263,6 +364,9 @@ def main():
     test_payload_contains_category()
     test_wallet_score_with_category()
     test_alert_with_category()
+
+    # Unit test del enriquecimiento vía Events API (mockeado, sin HTTP)
+    asyncio.run(test_enrich_market_with_event_data())
 
     # Integration test with real API (optional)
     print("\n" + "-" * 60)
