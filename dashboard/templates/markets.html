@@ -60,7 +60,7 @@
             <td>
               <span :class="m.closed ? 'badge-green' : 'badge-yellow'" x-text="m.closed ? 'Cerrado' : 'Abierto'"></span>
             </td>
-            <td class="text-xs text-slate-400" x-text="fmtDate(m.end_date)"></td>
+            <td class="text-xs text-slate-400" x-text="fmtDate(m.closed && m.closed_time ? m.closed_time : m.end_date)"></td>
           </tr>
         </template>
         <tr x-show="!items.length">

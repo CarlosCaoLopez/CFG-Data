@@ -41,10 +41,14 @@ class DataNormalizer:
         Returns:
             RawMarketMetadata instance
         """
-        # Parse end_date
+        # Parse end_date (scheduled/nominal end — often in the future)
         end_date = self._parse_datetime(
             raw.get("endDate") or raw.get("endDateIso")
         )
+
+        # Parse closed_time (actual resolution time). Null while the market is
+        # open. Markets resolve before end_date, so this is the real close date.
+        closed_time = self._parse_datetime_optional(raw.get("closedTime"))
 
         # Parse outcome_prices (comes as JSON string like '["1","0"]')
         outcome_prices = self._parse_outcome_prices(raw.get("outcomePrices"))
@@ -84,6 +88,7 @@ class DataNormalizer:
             question=raw.get("question", ""),
             end_date=end_date,
             closed=bool(raw.get("closed", False)),
+            closed_time=closed_time,
             outcome_prices=outcome_prices,
             volume_usdc=volume,
             category=category,
@@ -224,6 +229,16 @@ class DataNormalizer:
             trades=trades,
             wallet_ages=wallet_ages,
         )
+
+    def _parse_datetime_optional(self, value: Any) -> datetime | None:
+        """
+        Like _parse_datetime but returns None for missing/empty values instead
+        of defaulting to now(). Used for closedTime (null while market is open).
+        Gamma returns closedTime as e.g. '2026-06-24 17:21:32+00'.
+        """
+        if value is None or value == "":
+            return None
+        return self._parse_datetime(value)
 
     def _parse_datetime(self, value: Any) -> datetime:
         """Parse datetime from various formats"""

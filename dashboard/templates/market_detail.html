@@ -34,8 +34,8 @@
         </div>
       </div>
       <div>
-        <span class="text-slate-500 text-xs uppercase tracking-wide">Cierre</span>
-        <div class="mt-1 text-slate-400 text-xs" x-text="fmtDateFull(market.end_date)"></div>
+        <span class="text-slate-500 text-xs uppercase tracking-wide" x-text="market.closed && market.closed_time ? 'Cierre real' : 'Fin programado'"></span>
+        <div class="mt-1 text-slate-400 text-xs" x-text="fmtDateFull(market.closed && market.closed_time ? market.closed_time : market.end_date)"></div>
       </div>
       <div x-show="(market.categories || []).length">
         <span class="text-slate-500 text-xs uppercase tracking-wide">Categorías</span>

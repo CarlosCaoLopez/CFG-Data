@@ -362,6 +362,18 @@ class MarketCloseListener:
                             if event_tags:
                                 market["events"][0]["tags"] = event_tags
 
+                    # The plain ?condition_ids query never includes closedTime
+                    # (actual resolution time). Re-fetch via the closed-aware
+                    # query so closed_time is populated on the realtime path.
+                    if not market.get("closedTime"):
+                        closed_market = (
+                            await self.markets_collector.fetch_closed_market_by_id(
+                                condition_id
+                            )
+                        )
+                        if closed_market and closed_market.get("closedTime"):
+                            market["closedTime"] = closed_market["closedTime"]
+
                     self.logger.info(
                         "market_close_detected",
                         condition_id=condition_id[:20] + "...",

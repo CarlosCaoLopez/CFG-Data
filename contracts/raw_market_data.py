@@ -27,8 +27,13 @@ class RawMarketMetadata(BaseModel):
     """Metadata about a Polymarket market"""
     market_id: str = Field(..., description="conditionId from Polymarket")
     question: str = Field(..., description="Market question")
-    end_date: datetime = Field(..., description="Market end/resolution date")
+    end_date: datetime = Field(..., description="Scheduled/nominal market end date (often in the future even after resolution)")
     closed: bool = Field(..., description="Whether market is closed")
+    closed_time: datetime | None = Field(
+        None,
+        description="Actual resolution time (closedTime from Gamma). None while open. "
+                    "Markets resolve before end_date, so this is the real close date."
+    )
     outcome_prices: list[float] | None = Field(
         None,
         description="Final outcome prices if resolved (e.g., [1.0, 0.0])"

@@ -390,6 +390,7 @@ class QueueOrchestrator:
             "question":       meta.question,
             "end_date":       meta.end_date,
             "closed":         meta.closed,
+            "closed_time":    meta.closed_time,
             "outcome_prices": meta.outcome_prices,
             "volume_usdc":    meta.volume_usdc,
             "categories":     [meta.category] if meta.category else [],

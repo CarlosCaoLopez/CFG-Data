@@ -24,7 +24,7 @@ async def get_markets(
 
     rows = (await session.execute(text(f"""
         SELECT
-          m.market_id, m.question, m.end_date, m.closed,
+          m.market_id, m.question, m.end_date, m.closed, m.closed_time,
           m.volume_usdc, m.categories, m.tags, m.winning_outcome, m.updated_at,
           COUNT(DISTINCT t.id)  AS trades_count,
           COUNT(DISTINCT it.id) AS insiders_count
@@ -75,6 +75,8 @@ def _market_row(r) -> dict:
     m = dict(r._mapping)
     if m.get("end_date"):
         m["end_date"] = m["end_date"].isoformat()
+    if m.get("closed_time"):
+        m["closed_time"] = m["closed_time"].isoformat()
     if m.get("updated_at"):
         m["updated_at"] = m["updated_at"].isoformat()
     m["volume_usdc"] = float(m.get("volume_usdc") or 0)

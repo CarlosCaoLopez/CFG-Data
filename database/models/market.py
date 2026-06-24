@@ -14,6 +14,11 @@ class Market(Base):
     question: Mapped[str] = mapped_column(Text, nullable=False)
     end_date: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     closed: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Actual resolution time (closedTime). NULL while open. Markets resolve
+    # before end_date, so this is the real close date shown in the dashboard.
+    closed_time: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
     # Usamos ARRAY de Postgres para los precios de los outcomes
     outcome_prices: Mapped[Optional[List[float]]] = mapped_column(ARRAY(Numeric))

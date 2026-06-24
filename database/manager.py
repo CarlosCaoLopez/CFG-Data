@@ -38,6 +38,7 @@ class DatabaseManager:
                 "question": stmt.excluded.question,
                 "end_date": stmt.excluded.end_date,
                 "closed": stmt.excluded.closed,
+                "closed_time": stmt.excluded.closed_time,
                 "outcome_prices": stmt.excluded.outcome_prices,
                 "volume_usdc": stmt.excluded.volume_usdc,
                 "categories": stmt.excluded.categories,

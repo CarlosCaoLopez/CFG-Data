@@ -266,6 +266,41 @@ class MarketsCollector:
             )
             raise
 
+    async def fetch_closed_market_by_id(self, condition_id: str) -> dict | None:
+        """
+        Fetch a single market by conditionId using the closed-aware query.
+
+        The plain /markets?condition_ids=X query defaults to closed=false, so it
+        returns [] (or a stale closed=false row) once a market resolves and never
+        includes `closedTime`. Passing closed=true returns the resolved row WITH
+        `closedTime` (the actual resolution time). Used at close time to capture
+        closed_time for the realtime (L1) path.
+        """
+        client = get_http_client()
+
+        params = {"condition_ids": condition_id, "closed": "true"}
+
+        try:
+            response = await client.get(
+                self.base_url,
+                params=params,
+                api_type=APIType.POLYMARKET,
+            )
+            if isinstance(response, list) and response:
+                return response[0]
+            elif isinstance(response, dict):
+                markets = response.get("data", response.get("markets", []))
+                if markets:
+                    return markets[0]
+            return None
+        except Exception as e:
+            logger.warning(
+                "fetch_closed_market_by_id_failed",
+                condition_id=condition_id,
+                error=str(e),
+            )
+            return None
+
     async def fetch_event_by_id(self, event_id: str) -> dict | None:
         """
         Fetch a single event from the Gamma Events API.
