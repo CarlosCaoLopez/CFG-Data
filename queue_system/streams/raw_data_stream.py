@@ -5,13 +5,21 @@ import structlog
 
 logger = structlog.get_logger()
 
+# Tope de seguridad del stream raw_data. Cada entrada es un MarketDataBatch
+# completo (market + TODOS sus trades + wallet_ages), del orden de cientos de KB,
+# así que el stream se mantiene corto a propósito: en una Pi de 2GB unas pocas
+# centenas de batches ya consumen >300MB de Redis. El consumer (orchestrator)
+# va al día, por lo que este margen nunca recorta mensajes sin procesar; solo
+# evita que entradas YA consumidas-y-ackeadas se acumulen indefinidamente.
+RAW_DATA_MAXLEN = 500
+
 # Jobs Stream - A→B: Queue to Workers
 class RawDataStream:
     """
     Stream de Redis para datos crudos desde Ingestion.
     Recibe MarketDataBatch y los almacena para que el Scheduler los procese.
     """
-    
+
     def __init__(self, redis_client: Redis, stream_name: str = "raw_data"):
         self.redis = redis_client
         self.stream_name = stream_name
@@ -35,7 +43,15 @@ class RawDataStream:
             'category': batch.metadata.category or 'unknown',
         }
 
-        message_id = await self.redis.xadd(self.stream_name, message)
+        # MAXLEN ~ (approximate=True) deja que Redis recorte por bloques enteros
+        # del radix tree: es mucho más barato que el recorte exacto y suficiente
+        # para acotar la memoria del stream.
+        message_id = await self.redis.xadd(
+            self.stream_name,
+            message,
+            maxlen=RAW_DATA_MAXLEN,
+            approximate=True,
+        )
 
         logger.info(
             "batch_added_to_stream",

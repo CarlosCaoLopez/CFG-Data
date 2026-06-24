@@ -21,6 +21,15 @@ from ingestion.config import get_settings
 
 logger = structlog.get_logger()
 
+# Topes de seguridad para los streams publicados directamente con xadd.
+# Acotan la memoria de Redis (crítico en despliegues con poca RAM, p.ej. Raspberry Pi):
+# sin MAXLEN los streams crecen sin límite porque las entradas consumidas-y-ackeadas
+# permanecen hasta un XTRIM/XDEL explícito.
+#   - closed_markets: cada entrada es un MarketDataBatch completo (cientos de KB).
+#   - insider_trades: entradas mucho más pequeñas (trades de una wallet).
+CLOSED_MARKETS_MAXLEN = 500
+INSIDER_TRADES_MAXLEN = 2000
+
 
 class RedisPublisher(QueueProducer):
     """
@@ -176,7 +185,12 @@ class RedisPublisher(QueueProducer):
         }
 
         try:
-            msg_id = await redis_client.xadd(settings.closed_markets_stream, message)
+            msg_id = await redis_client.xadd(
+                settings.closed_markets_stream,
+                message,
+                maxlen=CLOSED_MARKETS_MAXLEN,
+                approximate=True,
+            )
             message_id = msg_id.decode() if isinstance(msg_id, bytes) else str(msg_id)
 
             self.logger.info(
@@ -235,7 +249,12 @@ class RedisPublisher(QueueProducer):
         }
 
         try:
-            msg_id = await redis_client.xadd(settings.insider_trades_stream, message)
+            msg_id = await redis_client.xadd(
+                settings.insider_trades_stream,
+                message,
+                maxlen=INSIDER_TRADES_MAXLEN,
+                approximate=True,
+            )
             message_id = msg_id.decode() if isinstance(msg_id, bytes) else str(msg_id)
 
             self.logger.info(

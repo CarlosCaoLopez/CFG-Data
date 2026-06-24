@@ -16,7 +16,7 @@ services:
     deploy:
       resources:
         limits:
-          memory: 384M
+          memory: 256M
 
   postgres:
     image: timescale/timescaledb:latest-pg15
