@@ -203,6 +203,16 @@ services:
     volumes:
       - ./dashboard:/app/dashboard
 
+  mail-monitor:
+    build: ./mail-monitor
+    container_name: mail-monitor
+    restart: unless-stopped
+    environment:
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+
 volumes:
   redis_data:
   postgres_data:
