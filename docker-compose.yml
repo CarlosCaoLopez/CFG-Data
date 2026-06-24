@@ -1,6 +1,7 @@
 services:
   redis:
     image: redis:7-alpine
+    restart: unless-stopped
     ports:
       - "127.0.0.1:6379:6379"
     volumes:
@@ -12,9 +13,14 @@ services:
       interval: 5s
       timeout: 3s
       retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 128M
 
   postgres:
     image: timescale/timescaledb:latest-pg15
+    restart: unless-stopped
     environment:
       POSTGRES_USER: insider
       POSTGRES_PASSWORD: insider_pass
@@ -30,6 +36,10 @@ services:
       interval: 5s
       timeout: 3s
       retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 384M
 
   migrate:
     build:
@@ -50,6 +60,7 @@ services:
       context: .
       dockerfile: Dockerfile
     command: python -m ingestion.main
+    restart: unless-stopped
     env_file: .env
     environment:
       - REDIS_URL=redis://redis:6379/0
@@ -57,6 +68,10 @@ services:
       - redis
     networks:
       - proyect_net
+    deploy:
+      resources:
+        limits:
+          memory: 192M
 
   backfill:
     build:
@@ -82,6 +97,7 @@ services:
     command: >
       sh -c "poetry run alembic upgrade head &&
             python -m queue_system"
+    restart: unless-stopped
     env_file: .env
     environment:
       - REDIS_URL=redis://redis:6379/0
@@ -95,11 +111,16 @@ services:
         condition: service_healthy
     networks:
       - proyect_net
+    deploy:
+      resources:
+        limits:
+          memory: 192M
 
   api:
     build: .
     container_name: python_api
     command: uvicorn api.main:app --host 0.0.0.0 --port 8000
+    restart: unless-stopped
     env_file: .env
     environment:
       - REDIS_URL=redis://redis:6379/0
@@ -113,6 +134,10 @@ services:
         condition: service_healthy
     networks:
       - proyect_net
+    deploy:
+      resources:
+        limits:
+          memory: 160M
 
   inference:
     build:
@@ -127,6 +152,7 @@ services:
       - POSTGRES_USER=insider
       - POSTGRES_PASSWORD=insider_pass
       - API_URL=http://api:8000
+    restart: unless-stopped
     depends_on:
       postgres:
         condition: service_healthy
@@ -134,12 +160,17 @@ services:
         condition: service_started
     networks:
       - proyect_net
+    deploy:
+      resources:
+        limits:
+          memory: 320M
 
   worker:
     build:
       context: .
       dockerfile: Dockerfile
     command: poetry run celery -A workers.celery_app worker --loglevel=info
+    restart: unless-stopped
     env_file: .env
     environment:
       - REDIS_URL=redis://redis:6379/0
@@ -156,7 +187,10 @@ services:
     networks:
       - proyect_net
     deploy:
-      replicas: 4
+      replicas: 1
+      resources:
+        limits:
+          memory: 288M
     volumes:
       - .:/app
       - ./logs:/app/logs
@@ -166,6 +200,7 @@ services:
       context: .
       dockerfile: Dockerfile
     command: celery -A workers.celery_app beat --loglevel=info
+    restart: unless-stopped
     env_file: .env
     environment:
       - REDIS_URL=redis://redis:6379/0
@@ -180,12 +215,17 @@ services:
       - proyect_net
     volumes:
       - ./logs:/app/logs
+    deploy:
+      resources:
+        limits:
+          memory: 96M
 
   dashboard:
     build:
       context: .
       dockerfile: Dockerfile
     command: uvicorn dashboard.main:app --host 0.0.0.0 --port 8000 --reload
+    restart: unless-stopped
     env_file: .env
     environment:
       - REDIS_URL=redis://redis:6379/0
@@ -202,6 +242,10 @@ services:
       - proyect_net
     volumes:
       - ./dashboard:/app/dashboard
+    deploy:
+      resources:
+        limits:
+          memory: 160M
 
   mail-monitor:
     build: ./mail-monitor
@@ -212,6 +256,10 @@ services:
       - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
+    deploy:
+      resources:
+        limits:
+          memory: 64M
 
 volumes:
   redis_data:
