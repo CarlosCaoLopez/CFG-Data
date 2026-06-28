@@ -1,8 +1,21 @@
+import asyncio
+import time
+
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text
 
+# Caché compartida de KPIs. Los 8 COUNT(*) son full scans caros y el SSE los
+# pedía cada 5s por cada cliente conectado. Con esto se calculan como mucho una
+# vez cada _KPIS_TTL segundos, y todos los clientes (SSE + /api/overview)
+# comparten el mismo resultado. El lock evita el "thundering herd" cuando varias
+# requests llegan a la vez con la caché expirada.
+_KPIS_TTL = 20.0
+_kpis_cache: dict | None = None
+_kpis_cache_at: float = 0.0
+_kpis_lock = asyncio.Lock()
 
-async def get_kpis(session: AsyncSession) -> dict:
+
+async def _query_kpis(session: AsyncSession) -> dict:
     row = (await session.execute(text("""
         SELECT
           (SELECT COUNT(*) FROM wallets)                            AS total_wallets,
@@ -16,6 +29,21 @@ async def get_kpis(session: AsyncSession) -> dict:
            AND updated_at >= NOW() - INTERVAL '24 hours')          AS detections_last_24h
     """))).fetchone()
     return dict(row._mapping) if row else {}
+
+
+async def get_kpis(session: AsyncSession) -> dict:
+    global _kpis_cache, _kpis_cache_at
+
+    if _kpis_cache is not None and (time.monotonic() - _kpis_cache_at) < _KPIS_TTL:
+        return _kpis_cache
+
+    async with _kpis_lock:
+        # Otra corutina pudo refrescar la caché mientras esperábamos el lock.
+        if _kpis_cache is not None and (time.monotonic() - _kpis_cache_at) < _KPIS_TTL:
+            return _kpis_cache
+        _kpis_cache = await _query_kpis(session)
+        _kpis_cache_at = time.monotonic()
+        return _kpis_cache
 
 
 async def get_top_categories(session: AsyncSession, limit: int = 8) -> list[dict]:

@@ -26,13 +26,10 @@ async def get_markets(
         SELECT
           m.market_id, m.question, m.end_date, m.closed, m.closed_time,
           m.volume_usdc, m.categories, m.tags, m.winning_outcome, m.updated_at,
-          COUNT(DISTINCT t.id)  AS trades_count,
-          COUNT(DISTINCT it.id) AS insiders_count
+          (SELECT COUNT(*) FROM trades t          WHERE t.market_id = m.market_id)  AS trades_count,
+          (SELECT COUNT(*) FROM insiders_trades it WHERE it.market_id = m.market_id) AS insiders_count
         FROM markets m
-        LEFT JOIN trades t         ON t.market_id = m.market_id
-        LEFT JOIN insiders_trades it ON it.market_id = m.market_id
         {where}
-        GROUP BY m.market_id
         ORDER BY m.updated_at DESC
         LIMIT :limit OFFSET :offset
     """), params)).fetchall()
@@ -50,12 +47,11 @@ async def get_markets(
 
 async def get_market_detail(session: AsyncSession, market_id: str) -> dict | None:
     row = (await session.execute(text("""
-        SELECT m.*, COUNT(DISTINCT t.id) AS trades_count, COUNT(DISTINCT it.id) AS insiders_count
+        SELECT m.*,
+          (SELECT COUNT(*) FROM trades t          WHERE t.market_id = m.market_id)  AS trades_count,
+          (SELECT COUNT(*) FROM insiders_trades it WHERE it.market_id = m.market_id) AS insiders_count
         FROM markets m
-        LEFT JOIN trades t ON t.market_id = m.market_id
-        LEFT JOIN insiders_trades it ON it.market_id = m.market_id
         WHERE m.market_id = :mid
-        GROUP BY m.market_id
     """), {"mid": market_id})).fetchone()
     if not row:
         return None

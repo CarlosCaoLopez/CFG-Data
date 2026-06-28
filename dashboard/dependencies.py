@@ -2,7 +2,14 @@ from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, Asyn
 from redis.asyncio import Redis
 from dashboard.config import DATABASE_URL_ASYNC, REDIS_URL
 
-_engine = create_async_engine(DATABASE_URL_ASYNC, pool_size=3, max_overflow=2, echo=False)
+_engine = create_async_engine(
+    DATABASE_URL_ASYNC,
+    pool_size=10,
+    max_overflow=10,
+    pool_pre_ping=True,
+    pool_recycle=1800,
+    echo=False,
+)
 _session_factory = async_sessionmaker(_engine, expire_on_commit=False, class_=AsyncSession)
 
 _redis: Redis | None = None
