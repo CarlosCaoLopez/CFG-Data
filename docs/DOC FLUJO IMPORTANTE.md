@@ -272,8 +272,9 @@ _gamma_discovery_loop()  [cada 15 min — catch-all para markets sin trades reci
   → si category/tags ∈ CATEGORIAS_DE_INTERES → _tracked_markets
 
 _close_detection_loop()  [cada 60s]
-  → MarketsCollector.fetch_market_by_id() por cada tracked market
-  → si closed=True → _handle_market_close()
+  → MarketsCollector.fetch_closed_markets_by_ids()  # batch: ?condition_ids=…&closed=true
+        # 1 request por chunk (20 ids) en vez de 1 por market; solo vuelven los cerrados
+  → por cada market devuelto (ya cerrado) → _handle_market_close()
         → TradesCollector.fetch_trades_for_market()
         → WalletAgeCollector.fetch_wallet_ages_batch()
         → DataNormalizer.normalize_batch()  → MarketDataBatch
@@ -933,7 +934,7 @@ Al levantar la capa de ingestion (`python -m ingestion.main`), se arrancan **dos
 |------|-----------|----------|
 | `_ws_discovery_loop()` | Continuo | Escucha eventos OrderFilled on-chain via WebSocket de Polygon. Cada trade descubierto → enriquece market metadata via Events API → si tags/category coinciden con `CATEGORIAS_DE_INTERES` → añade a `_tracked_markets` |
 | `_gamma_discovery_loop()` | Cada 15 min | `GET /markets?closed=false&volume_num_min=X` + Events API para tags/category. Catch-all para mercados sin trades recientes que el WebSocket no vería |
-| `_close_detection_loop()` | Cada 60s | Re-consulta cada tracked market via `fetch_market_by_id()`. Si `closed=true` → ejecuta `_handle_market_close()` |
+| `_close_detection_loop()` | Cada 60s | Detección por lotes via `fetch_closed_markets_by_ids()`: consulta `?condition_ids=…&closed=true` en chunks de 20 (1 request/chunk en vez de 1/market). Por cada market devuelto (ya cerrado) → `_handle_market_close()`. ⚠️ **Debe usar `closed=true`**: la query plana `?condition_ids=X` filtra `closed=false` por defecto y oculta los mercados resueltos, por lo que el cierre nunca se detectaría |
 
 **Flujo de cierre (`_handle_market_close`):**
 1. `TradesCollector.fetch_trades_for_market()` → obtiene TODOS los trades

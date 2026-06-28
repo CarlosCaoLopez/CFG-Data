@@ -301,6 +301,64 @@ class MarketsCollector:
             )
             return None
 
+    async def fetch_closed_markets_by_ids(
+        self,
+        condition_ids: list[str],
+        chunk_size: int = 20,
+    ) -> dict[str, dict]:
+        """
+        Batch-check many condition_ids for closure with one query per chunk.
+
+        Polls Gamma with ?condition_ids=a&condition_ids=b&...&closed=true
+        (aiohttp repeats the key for a list value). The closed filter runs
+        server-side, so the response contains ONLY the ids that have actually
+        resolved — one request replaces `chunk_size` individual polls. Used by
+        L1 close detection to avoid 1 request per tracked market per sweep.
+
+        chunk_size is kept modest (each conditionId is 66 chars) to stay well
+        under URL-length limits.
+
+        Returns {condition_id: market_dict} for the closed markets found.
+        Markets still open are simply absent from the result.
+        """
+        client = get_http_client()
+        found: dict[str, dict] = {}
+
+        for i in range(0, len(condition_ids), chunk_size):
+            chunk = condition_ids[i:i + chunk_size]
+            params = {
+                "condition_ids": chunk,
+                "closed": "true",
+                "limit": str(chunk_size),
+            }
+            try:
+                response = await client.get(
+                    self.base_url,
+                    params=params,
+                    api_type=APIType.POLYMARKET,
+                )
+            except Exception as e:
+                logger.warning(
+                    "fetch_closed_markets_by_ids_chunk_failed",
+                    chunk_size=len(chunk),
+                    error=str(e),
+                )
+                continue
+
+            if isinstance(response, list):
+                markets = response
+            elif isinstance(response, dict):
+                markets = response.get("data", response.get("markets", []))
+            else:
+                markets = []
+
+            for market in markets:
+                cid = market.get("conditionId")
+                if cid and market.get("closed"):
+                    found[cid] = market
+
+        return found
+
     async def fetch_event_by_id(self, event_id: str) -> dict | None:
         """
         Fetch a single event from the Gamma Events API.

@@ -321,7 +321,20 @@ class MarketCloseListener:
             )
 
     async def _check_for_closures(self) -> None:
-        """Re-fetch each tracked market and handle closures."""
+        """
+        Batch-detect closures across all tracked markets.
+
+        Detection uses the closed-aware query: the plain ?condition_ids=X query
+        defaults to closed=false, so a resolved market returns [] or a stale
+        closed=false row and the closure is NEVER detected. Querying closed=true
+        returns ONLY the ids that have resolved.
+
+        Batching (fetch_closed_markets_by_ids) collapses what used to be one
+        request per tracked market (~668 req/sweep, >6 min under the rate limit)
+        into one request per chunk (~34 req/sweep, ~20s). The Events API + trade
+        collection cost is then paid only for the few markets that actually
+        closed, not for every tracked market.
+        """
         if not self._tracked_markets:
             return
 
@@ -333,48 +346,48 @@ class MarketCloseListener:
             tracked_count=len(market_ids),
         )
 
-        for condition_id in market_ids:
+        try:
+            closed_markets = await self.markets_collector.fetch_closed_markets_by_ids(
+                market_ids
+            )
+        except Exception as e:
+            self.logger.error("close_detection_error", error=str(e))
+            return
+
+        for condition_id, market in closed_markets.items():
             if not self._running:
                 break
+            if condition_id in self._processed_markets:
+                continue
 
             try:
-                # Detect closure with the closed-aware query. The plain
-                # ?condition_ids=X query (fetch_market_by_id) defaults to
-                # closed=false, so a resolved market returns [] (→ None) or a
-                # stale closed=false row and the closure is NEVER detected.
-                # Querying closed=true returns the resolved row (with closedTime)
-                # only once the market closes; None means it's still open.
-                market = await self.markets_collector.fetch_closed_market_by_id(
-                    condition_id
-                )
-                if market and market.get("closed"):
-                    # The ?condition_ids query returns events[].id but NEVER
-                    # category or events[].tags. Re-fetch from Events API now
-                    # that the market is closed to get both category and tags.
-                    event_id = None
-                    events = market.get("events", [])
-                    if events and isinstance(events, list) and len(events) > 0:
-                        event_id = events[0].get("id")
-                    if event_id:
-                        event_data = await self.markets_collector.fetch_event_by_id(
-                            str(event_id)
-                        )
-                        if event_data:
-                            event_category = event_data.get("category")
-                            if event_category:
-                                market["category"] = event_category
-                            event_tags = event_data.get("tags", [])
-                            if event_tags:
-                                market["events"][0]["tags"] = event_tags
-
-                    self.logger.info(
-                        "market_close_detected",
-                        condition_id=condition_id[:20] + "...",
-                        question=market.get("question", "")[:50],
+                # The ?condition_ids query returns events[].id but NEVER
+                # category or events[].tags. Re-fetch from Events API now
+                # that the market is closed to get both category and tags.
+                event_id = None
+                events = market.get("events", [])
+                if events and isinstance(events, list) and len(events) > 0:
+                    event_id = events[0].get("id")
+                if event_id:
+                    event_data = await self.markets_collector.fetch_event_by_id(
+                        str(event_id)
                     )
-                    await self._handle_market_close(market)
-                    self._processed_markets.add(condition_id)
-                    self._tracked_markets.pop(condition_id, None)
+                    if event_data:
+                        event_category = event_data.get("category")
+                        if event_category:
+                            market["category"] = event_category
+                        event_tags = event_data.get("tags", [])
+                        if event_tags:
+                            market["events"][0]["tags"] = event_tags
+
+                self.logger.info(
+                    "market_close_detected",
+                    condition_id=condition_id[:20] + "...",
+                    question=market.get("question", "")[:50],
+                )
+                await self._handle_market_close(market)
+                self._processed_markets.add(condition_id)
+                self._tracked_markets.pop(condition_id, None)
 
             except Exception as e:
                 self.logger.warning(
