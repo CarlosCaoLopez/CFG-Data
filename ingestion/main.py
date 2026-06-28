@@ -8,6 +8,8 @@
 #   poetry run python -m ingestion.main
 
 import asyncio
+import logging
+import os
 import signal
 import structlog
 import uvicorn
@@ -21,7 +23,23 @@ from ingestion.stats_server import stats_app, set_listeners
 logger = structlog.get_logger()
 
 
+def _configure_logging() -> None:
+    """
+    Set the structlog level from LOG_LEVEL (default INFO).
+
+    Without this, structlog uses its unfiltered default and the DEBUG
+    http_request/http_response logs from http_client flood stdout/journald
+    (~330k lines/24h on the Pi, wearing the SD card). INFO drops them.
+    Override with LOG_LEVEL=DEBUG for troubleshooting.
+    """
+    level = getattr(logging, os.environ.get("LOG_LEVEL", "INFO").upper(), logging.INFO)
+    structlog.configure(
+        wrapper_class=structlog.make_filtering_bound_logger(level),
+    )
+
+
 async def main() -> None:
+    _configure_logging()
     settings = get_settings()
     logger.info(
         "ingestion_starting",

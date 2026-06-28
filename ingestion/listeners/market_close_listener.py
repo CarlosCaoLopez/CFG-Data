@@ -338,14 +338,19 @@ class MarketCloseListener:
                 break
 
             try:
-                market = await self.markets_collector.fetch_market_by_id(
+                # Detect closure with the closed-aware query. The plain
+                # ?condition_ids=X query (fetch_market_by_id) defaults to
+                # closed=false, so a resolved market returns [] (→ None) or a
+                # stale closed=false row and the closure is NEVER detected.
+                # Querying closed=true returns the resolved row (with closedTime)
+                # only once the market closes; None means it's still open.
+                market = await self.markets_collector.fetch_closed_market_by_id(
                     condition_id
                 )
                 if market and market.get("closed"):
-                    # fetch_market_by_id (?condition_ids=X) returns events[].id
-                    # but NEVER category or events[].tags.
-                    # Re-fetch from Events API now that market is closed
-                    # to get both category and tags.
+                    # The ?condition_ids query returns events[].id but NEVER
+                    # category or events[].tags. Re-fetch from Events API now
+                    # that the market is closed to get both category and tags.
                     event_id = None
                     events = market.get("events", [])
                     if events and isinstance(events, list) and len(events) > 0:
@@ -361,18 +366,6 @@ class MarketCloseListener:
                             event_tags = event_data.get("tags", [])
                             if event_tags:
                                 market["events"][0]["tags"] = event_tags
-
-                    # The plain ?condition_ids query never includes closedTime
-                    # (actual resolution time). Re-fetch via the closed-aware
-                    # query so closed_time is populated on the realtime path.
-                    if not market.get("closedTime"):
-                        closed_market = (
-                            await self.markets_collector.fetch_closed_market_by_id(
-                                condition_id
-                            )
-                        )
-                        if closed_market and closed_market.get("closedTime"):
-                            market["closedTime"] = closed_market["closedTime"]
 
                     self.logger.info(
                         "market_close_detected",
