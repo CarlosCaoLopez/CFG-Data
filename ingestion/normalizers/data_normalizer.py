@@ -31,6 +31,13 @@ class DataNormalizer:
         if categorias_de_interes:
             self._interests = set(s.lower() for s in categorias_de_interes)
 
+    def set_interests(self, categorias_de_interes: list[str] | None) -> None:
+        """Update the tag→category derivation filter at runtime (keeps L1 in sync)."""
+        if categorias_de_interes:
+            self._interests = set(s.lower() for s in categorias_de_interes)
+        else:
+            self._interests = None
+
     def normalize_market(self, raw: dict[str, Any]) -> RawMarketMetadata:
         """
         Convert raw Gamma API market response to RawMarketMetadata.

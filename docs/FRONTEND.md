@@ -198,6 +198,24 @@ Muestra el contenido actual de `closed_market_variables` — la tabla temporal q
 
 ---
 
+### Settings (`/settings`)
+
+Editor del filtro de categorías (`CATEGORIAS_DE_INTERES`) que L1 y L2 usan para decidir qué markets/wallets monitorear.
+
+**Cómo funciona:**
+- `GET /api/config/categories` → lee la lista actual (`dashboard/routers/settings.py` → `l1_stats_client` → `GET http://ingestion:9001/config/categories`).
+- `POST /api/config/categories` con `{"categories": [...]}` → `POST http://ingestion:9001/config/categories` → llama a `InterestsRegistry.set()`.
+
+**El cambio se propaga en vivo a L1 y L2 a la vez** (via el registry compartido) y surte efecto en el siguiente ciclo de polling (no reinicia los listeners). L1 además **poda** los markets ya trackeados que dejan de matchear el nuevo filtro. Si `ingestion:9001` no responde, la página muestra el filtro como no disponible.
+
+> **Persistencia (importante):** el filtro se guarda en la clave Redis `config:categorias_de_interes`, que vive en el volumen durable de Redis, así que **los cambios sobreviven a `docker compose down/build/up`**. El `.env` (`CATEGORIAS_DE_INTERES`) actúa **solo como semilla inicial** cuando esa clave todavía no existe (Redis nuevo / volumen borrado). Una vez sembrada, editar el `.env` ya no cambia nada — Redis manda. Para forzar que el `.env` vuelva a mandar, borra la clave:
+> ```bash
+> docker exec cfg-data-redis-1 redis-cli DEL config:categorias_de_interes
+> ```
+> Ver el detalle del registry compartido en la sección 7.
+
+---
+
 ## 5. API JSON — endpoints disponibles
 
 Todos devuelven JSON. Útiles para hacer `curl` directo durante troubleshooting.
@@ -296,7 +314,7 @@ Estos datos no son accesibles desde fuera del proceso sin algún mecanismo de IP
 Al arrancar `ingestion`, se levanta un servidor FastAPI mínimo en el puerto `9001` (solo accesible dentro de la red Docker `proyect_net`, no expuesto al host).
 
 **Archivos:**
-- `ingestion/stats_server.py` — define el servidor con el endpoint `/stats`
+- `ingestion/stats_server.py` — define el servidor con los endpoints `/stats` y `/config/categories`
 - `ingestion/main.py` — lo arranca como cuarta tarea en `asyncio.gather`
 
 **Endpoint:**
@@ -322,6 +340,37 @@ Respuesta:
 ```
 
 El dashboard llama a este endpoint en `GET /api/pipeline` via `dashboard/l1_stats_client.py` con un timeout de 2 segundos. Si falla (ingestion caído, port no disponible), devuelve `null` y el frontend muestra "L1 unavailable" sin romper nada.
+
+### Filtro de categorías: `InterestsRegistry` (source of truth compartido)
+
+El filtro de categorías (`CATEGORIAS_DE_INTERES`) NO vive en cada listener por separado, sino en un único **`InterestsRegistry`** (`ingestion/interests_registry.py`) que:
+- **Persiste** la lista en Redis (`config:categorias_de_interes`, volumen durable) → sobrevive redeploys.
+- **Notifica en vivo** a todos los suscriptores en cada cambio (patrón observer in-process).
+
+`main.py` crea **un** registry y lo inyecta a L1 y L2; ambos se suscriben con un callback. Así un solo edit se propaga a los dos a la vez — no hay ningún path que actualice uno sin el otro. Añadir un consumidor futuro = suscribirse.
+
+**Suscriptores actuales:**
+| Suscriptor | Qué actualiza el callback |
+|-----------|---------------------------|
+| L1 (`MarketCloseListener`) | su set `_interests` + el normalizer + poda markets trackeados que ya no matchean |
+| L2 (`InsiderTradesListener`) | el `_interests` de su normalizer (derivación tag→category). Su filtro real de monitoreo sigue siendo el `categories_insider` por-wallet de T3, no el global |
+
+El mismo stats server expone el filtro que edita la página Settings:
+
+```
+GET  http://ingestion:9001/config/categories   → {"categories": [...]}    # InterestsRegistry.categories
+POST http://ingestion:9001/config/categories    body: {"categories": [...]} # InterestsRegistry.set()
+```
+
+`POST` → `InterestsRegistry.set()`: persiste en Redis (`RedisPublisher.set_categories_config()`) y notifica a L1+L2.
+
+**Carga en arranque (`InterestsRegistry.load()`, llamado por `main.py` tras suscribir L1+L2):**
+- Si la clave Redis existe → aplica esa lista y notifica (los cambios del dashboard sobreviven a redeploys).
+- Si no existe (Redis nuevo) → siembra la clave con `.env`/default, de modo que reinicios posteriores tengan algo que leer.
+
+> El `backfill_runner` (proceso one-shot, separado) también lee la clave de Redis al arrancar para respetar el filtro persistido; no necesita updates en vivo.
+
+Consecuencia: tras el primer arranque, **la fuente de verdad en runtime es Redis, no el `.env`**. Para volver a `.env`, borrar la clave (`redis-cli DEL config:categorias_de_interes`) y reiniciar ingestion.
 
 ---
 
@@ -358,7 +407,8 @@ dashboard/
     ├── trades.html           # Trade explorer
     └── variables.html        # CMV en vuelo
 
-ingestion/stats_server.py     # Mini FastAPI interna (puerto 9001)
+ingestion/stats_server.py       # Mini FastAPI interna (puerto 9001)
+ingestion/interests_registry.py # Source of truth compartido del filtro de categorías (Redis + observer)
 ```
 
 ---

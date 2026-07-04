@@ -20,6 +20,7 @@ from ingestion.publisher import RedisPublisher
 from ingestion.collectors.trades_collector import TradesCollector
 from ingestion.collectors.markets_collector import MarketsCollector
 from ingestion.normalizers.data_normalizer import DataNormalizer
+from ingestion.interests_registry import InterestsRegistry
 from contracts.raw_market_data import InsiderTradeCommand
 
 logger = structlog.get_logger()
@@ -53,6 +54,7 @@ class InsiderTradesListener:
         trades_collector: TradesCollector | None = None,
         markets_collector: MarketsCollector | None = None,
         normalizer: DataNormalizer | None = None,
+        registry: "InterestsRegistry | None" = None,
     ):
         self.settings = get_settings()
         self.publisher = publisher or RedisPublisher()
@@ -82,6 +84,20 @@ class InsiderTradesListener:
             "trades_published": 0,
         }
 
+        # Shared category filter (see InterestsRegistry). L2 uses it only to keep
+        # its normalizer's tag→category derivation in sync — the per-wallet
+        # categories_insider (from T3) remain the actual monitoring filter.
+        self._owns_registry = registry is None
+        self.registry = registry or InterestsRegistry(
+            self.publisher, self.settings.categorias_de_interes
+        )
+        self.registry.subscribe(self._on_interests_changed)
+
+    def _on_interests_changed(self, new_categories: list[str]) -> None:
+        """Registry callback: keep the normalizer's derivation filter live."""
+        self.normalizer.set_interests(new_categories)
+        self.logger.info("interests_applied", new_interests=new_categories)
+
     @property
     def monitored_count(self) -> int:
         return len(self._monitored_wallets)
@@ -100,6 +116,11 @@ class InsiderTradesListener:
         """Run command listener + trade polling concurrently."""
         self._running = True
         self.logger.info("l2_starting")
+
+        # Load persisted category filter (survives redeploys). If a shared
+        # registry was injected, main.py loads it once for L1 + L2.
+        if self._owns_registry:
+            await self.registry.load()
 
         # Ensure consumer group exists
         await self._ensure_consumer_group()

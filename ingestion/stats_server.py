@@ -13,12 +13,14 @@ stats_app = FastAPI(title="Ingestion Stats", docs_url=None, redoc_url=None)
 
 _l1_ref = None
 _l2_ref = None
+_registry_ref = None
 
 
-def set_listeners(l1, l2=None) -> None:
-    global _l1_ref, _l2_ref
+def set_listeners(l1, l2=None, registry=None) -> None:
+    global _l1_ref, _l2_ref, _registry_ref
     _l1_ref = l1
     _l2_ref = l2
+    _registry_ref = registry
 
 
 @stats_app.get("/stats")
@@ -50,18 +52,19 @@ async def get_stats() -> dict:
 
 @stats_app.get("/config/categories")
 async def get_categories() -> dict:
-    if _l1_ref is None:
+    if _registry_ref is None:
         return {"categories": []}
-    return {"categories": sorted(_l1_ref._interests)}
+    return {"categories": sorted(_registry_ref.categories)}
 
 
 @stats_app.post("/config/categories")
 async def set_categories(body: dict) -> dict:
-    if _l1_ref is None:
-        raise HTTPException(status_code=503, detail="L1 not initialized")
+    if _registry_ref is None:
+        raise HTTPException(status_code=503, detail="Registry not initialized")
     new_cats = body.get("categories", [])
-    _l1_ref.refresh_interests(new_cats)
-    return {"ok": True, "categories": sorted(_l1_ref._interests)}
+    # Registry persists to Redis + notifies all subscribers (L1 + L2) live.
+    await _registry_ref.set(new_cats)
+    return {"ok": True, "categories": sorted(_registry_ref.categories)}
 
 
 @stats_app.get("/health")

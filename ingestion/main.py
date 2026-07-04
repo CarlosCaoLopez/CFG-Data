@@ -16,6 +16,7 @@ import uvicorn
 
 from ingestion.config import get_settings
 from ingestion.publisher import RedisPublisher
+from ingestion.interests_registry import InterestsRegistry
 from ingestion.listeners.market_close_listener import MarketCloseListener
 from ingestion.listeners.insider_trades_listener import InsiderTradesListener
 from ingestion.stats_server import stats_app, set_listeners
@@ -56,8 +57,14 @@ async def main() -> None:
 
     logger.info("redis_connection_ok")
 
-    l1 = MarketCloseListener(publisher=publisher)
-    l2 = InsiderTradesListener(publisher=publisher)
+    # Single shared category filter for both listeners: one Redis-backed source
+    # of truth, so an edit propagates live to L1 and L2 together (and survives
+    # redeploys). .env is only the seed for a fresh Redis.
+    registry = InterestsRegistry(publisher, settings.categorias_de_interes)
+    l1 = MarketCloseListener(publisher=publisher, registry=registry)
+    l2 = InsiderTradesListener(publisher=publisher, registry=registry)
+    # Load once now that both listeners have subscribed (notifies both).
+    await registry.load()
 
     # Graceful shutdown on SIGINT/SIGTERM
     loop = asyncio.get_running_loop()
@@ -82,7 +89,7 @@ async def main() -> None:
         await publisher.close()
 
     async def _run_stats_server() -> None:
-        set_listeners(l1, l2)
+        set_listeners(l1, l2, registry)
         config = uvicorn.Config(
             stats_app,
             host="0.0.0.0",

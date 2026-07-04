@@ -84,6 +84,9 @@ class RealtimeOrchestrator:
 
         # Market metadata enrichment
         self._markets_collector = MarketsCollector()
+        # NOTE: seeds from .env only. If this orchestrator is ever wired into the
+        # live pipeline, subscribe it to the shared InterestsRegistry (see L1/L2)
+        # so category edits propagate live + survive redeploys instead of reading .env.
         self._normalizer = DataNormalizer(
             categorias_de_interes=self.settings.categorias_de_interes,
         )

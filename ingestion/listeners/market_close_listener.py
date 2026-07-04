@@ -13,6 +13,7 @@ from datetime import datetime, UTC
 
 from ingestion.config import get_settings
 from ingestion.publisher import RedisPublisher
+from ingestion.interests_registry import InterestsRegistry
 from ingestion.collectors.markets_collector import MarketsCollector
 from ingestion.collectors.trades_collector import TradesCollector
 from ingestion.collectors.wallet_age_collector import WalletAgeCollector
@@ -46,6 +47,7 @@ class MarketCloseListener:
         trades_collector: TradesCollector | None = None,
         wallet_age_collector: WalletAgeCollector | None = None,
         normalizer: DataNormalizer | None = None,
+        registry: "InterestsRegistry | None" = None,
     ):
         self.settings = get_settings()
         self.publisher = publisher or RedisPublisher()
@@ -66,10 +68,9 @@ class MarketCloseListener:
         self._market_cache: dict[str, RawMarketMetadata] = {}
         self._cache_misses: set[str] = set()
 
-        # Categories of interest (lowercased for comparison)
-        self._interests = set(
-            s.lower() for s in self.settings.categorias_de_interes
-        )
+        # Categories of interest (lowercased for comparison). Populated by the
+        # InterestsRegistry subscription below (fires immediately with the seed).
+        self._interests: set[str] = set()
 
         # WebSocket listener for on-chain discovery
         self._ws_listener: WebSocketListener | None = None
@@ -84,10 +85,25 @@ class MarketCloseListener:
             "markets_filtered_out": 0,
         }
 
-    def refresh_interests(self, new_categories: list[str]) -> None:
-        """Replace the in-memory category filter. Takes effect on the next polling cycle."""
+        # Shared category filter. If none is injected (standalone/tests) we own a
+        # private one and load it ourselves in run(); when main.py injects a
+        # shared registry, it drives L1 + L2 together and loads once.
+        self._owns_registry = registry is None
+        self.registry = registry or InterestsRegistry(
+            self.publisher, self.settings.categorias_de_interes
+        )
+        # Subscribe last: the callback touches attributes defined above.
+        self.registry.subscribe(self._on_interests_changed)
+
+    def _on_interests_changed(self, new_categories: list[str]) -> None:
+        """
+        Registry callback: apply the new filter live.
+
+        Updates the listener's lookup set and the normalizer's tag→category
+        derivation, then prunes tracked markets that no longer match.
+        """
         self._interests = set(s.lower() for s in new_categories)
-        # Prune tracked markets that no longer match the new interests
+        self.normalizer.set_interests(new_categories)
         to_remove = [
             mid for mid, meta in list(self._tracked_markets.items())
             if not self._matches_categories(meta)
@@ -95,10 +111,19 @@ class MarketCloseListener:
         for mid in to_remove:
             del self._tracked_markets[mid]
         self.logger.info(
-            "interests_refreshed",
+            "interests_applied",
             new_interests=list(self._interests),
             pruned_markets=len(to_remove),
         )
+
+    async def refresh_interests(self, new_categories: list[str]) -> None:
+        """
+        Replace the category filter via the shared registry.
+
+        Delegates to the registry, which persists to Redis and notifies every
+        subscriber (this L1 plus L2), so the change propagates live everywhere.
+        """
+        await self.registry.set(new_categories)
 
     @property
     def tracked_count(self) -> int:
@@ -111,6 +136,10 @@ class MarketCloseListener:
     async def run(self) -> None:
         """Run all three loops concurrently until stopped."""
         self._running = True
+        # Load persisted filter from Redis before starting (survives redeploys).
+        # If a shared registry was injected, main.py loads it once for L1 + L2.
+        if self._owns_registry:
+            await self.registry.load()
         self.logger.info(
             "l1_starting",
             categorias_de_interes=list(self._interests),

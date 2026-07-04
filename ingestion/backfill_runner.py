@@ -85,6 +85,18 @@ class BackfillRunner:
         publisher = get_publisher()
         http_client = get_http_client()
 
+        # Respect the persisted category filter (dashboard edits live in Redis;
+        # .env is only the seed). No live updates needed here — backfill is a
+        # one-shot batch job, so a single read at startup is enough.
+        if not self.dry_run:
+            try:
+                persisted = await publisher.get_categories_config()
+                if persisted:
+                    self.normalizer.set_interests(persisted)
+                    logger.info("backfill_interests_loaded_from_redis", categories=persisted)
+            except Exception as e:
+                logger.warning("backfill_interests_load_failed", error=str(e))
+
         stats = {
             "markets_processed": 0,
             "markets_skipped": 0,

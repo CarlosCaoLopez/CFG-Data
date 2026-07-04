@@ -30,6 +30,11 @@ logger = structlog.get_logger()
 CLOSED_MARKETS_MAXLEN = 500
 INSIDER_TRADES_MAXLEN = 2000
 
+# Clave Redis donde se persiste el filtro de categorías (CATEGORIAS_DE_INTERES).
+# Vive en el volumen durable de Redis, así que sobrevive a down/build/up.
+# El .env sólo actúa de semilla inicial cuando esta clave no existe todavía.
+CATEGORIES_CONFIG_KEY = "config:categorias_de_interes"
+
 
 class RedisPublisher(QueueProducer):
     """
@@ -275,6 +280,37 @@ class RedisPublisher(QueueProducer):
                 error=str(e),
             )
             raise
+
+    async def get_categories_config(self) -> list[str] | None:
+        """
+        Read the persisted category filter from Redis.
+
+        Returns:
+            The list of categories if the key exists, else None (never set).
+        """
+        redis_client = await self._get_redis()
+        raw = await redis_client.get(CATEGORIES_CONFIG_KEY)
+        if raw is None:
+            return None
+        if isinstance(raw, bytes):
+            raw = raw.decode()
+        try:
+            cats = json.loads(raw)
+            if isinstance(cats, list):
+                return [str(c) for c in cats]
+        except (json.JSONDecodeError, TypeError):
+            self.logger.warning("categories_config_parse_failed", raw=raw)
+        return None
+
+    async def set_categories_config(self, categories: list[str]) -> None:
+        """
+        Persist the category filter to Redis so it survives container restarts.
+
+        Args:
+            categories: List of categories/tags to monitor.
+        """
+        redis_client = await self._get_redis()
+        await redis_client.set(CATEGORIES_CONFIG_KEY, json.dumps(categories))
 
     async def health_check(self) -> bool:
         """
