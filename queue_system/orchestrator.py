@@ -19,6 +19,11 @@ import structlog
 
 logger = structlog.get_logger()
 
+# Backoff cuando la lectura de streams falla (p.ej. Redis en MISCONF por disco
+# lleno rechaza XREADGROUP, que es un comando de escritura). Sin esto el bucle
+# principal gira a plena CPU inundando los logs y agravando el disco lleno.
+READ_ERROR_BACKOFF_SECONDS = 5
+
 
 class QueueOrchestrator:
     """
@@ -206,14 +211,20 @@ class QueueOrchestrator:
 
         while not self._shutdown:
             try:
-                all_batches = await self._read_all_streams(batch_size)
+                batches, had_read_error = await self._read_all_streams(batch_size)
 
                 # Recupera batches huérfanos en la PEL (read() solo lee '>').
                 # Throttled internamente; se procesan por la misma vía + ACK.
                 stale_batches = await self._reclaim_stale_batches()
-                all_batches = stale_batches + all_batches
+                all_batches = stale_batches + batches
 
                 if not all_batches:
+                    # Si la lectura falló (p.ej. Redis rechaza escrituras con
+                    # MISCONF por disco lleno), XREADGROUP devuelve al instante
+                    # en vez de bloquear block_ms, y este bucle giraría a plena
+                    # CPU inundando los logs. Backoff para cortar el círculo.
+                    if had_read_error:
+                        await asyncio.sleep(READ_ERROR_BACKOFF_SECONDS)
                     continue
 
                 for source_stream, message_id, batch in all_batches:
@@ -339,10 +350,12 @@ class QueueOrchestrator:
 
     async def _read_all_streams(
         self, batch_size: int
-    ) -> list[tuple[RawDataStream, str, 'MarketDataBatch']]:
+    ) -> tuple[list[tuple[RawDataStream, str, 'MarketDataBatch']], bool]:
         """
         Read from all market input streams (raw_data + closed_markets) in parallel.
-        Returns list of (source_stream, message_id, batch) tuples.
+        Returns (batches, had_error): la lista de (source_stream, message_id,
+        batch) y un flag True si alguna lectura lanzó excepción, para que el
+        llamante haga backoff en vez de busy-loop.
         """
         input_streams = [self.raw_data_stream]
         if self.closed_markets_stream:
@@ -363,6 +376,7 @@ class QueueOrchestrator:
         results = await asyncio.gather(*read_tasks, return_exceptions=True)
 
         all_batches = []
+        had_error = False
         for stream, result in zip(input_streams, results):
             if isinstance(result, Exception):
                 self.logger.error(
@@ -371,13 +385,14 @@ class QueueOrchestrator:
                     error=str(result),
                 )
                 self._errors += 1
+                had_error = True
                 continue
             if result:
                 all_batches.extend(
                     (stream, msg_id, batch) for msg_id, batch in result
                 )
 
-        return all_batches
+        return all_batches, had_error
 
     # ================================================================
     # CONTRACT → DB DICT CONVERTERS

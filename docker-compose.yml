@@ -1,7 +1,26 @@
+# Tope de logs por contenedor: sin esto el driver json-file crece SIN LÍMITE.
+# Un busy-loop del orchestrator (Redis en MISCONF por disco lleno) llegó a
+# generar 33G en un solo *-json.log y tumbó la Pi. 10M × 3 = 30M máx/servicio.
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   redis:
     image: redis:7-alpine
     restart: unless-stopped
+    # --stop-writes-on-bgsave-error no: si el snapshot RDB falla (p.ej. disco
+    #   lleno), Redis SIGUE aceptando escrituras en vez de rechazarlas con
+    #   MISCONF. Rechazarlas hacía que XREADGROUP (comando de escritura) fallase
+    #   al instante y el orchestrator girase en busy-loop.
+    # --save "": desactiva los snapshots RDB periódicos. Los streams son datos
+    #   transitorios (MAXLEN + el pipeline persiste a Postgres en T1), así que no
+    #   necesitan durabilidad en disco; además evita el dump.rdb gigante (3.7G) y
+    #   reduce el desgaste de la SD.
+    command: redis-server --stop-writes-on-bgsave-error no --save "" --appendonly no
+    logging: *default-logging
     ports:
       - "127.0.0.1:6379:6379"
     volumes:
@@ -21,6 +40,7 @@ services:
   postgres:
     image: timescale/timescaledb:latest-pg15
     restart: unless-stopped
+    logging: *default-logging
     environment:
       POSTGRES_USER: insider
       POSTGRES_PASSWORD: insider_pass
@@ -46,6 +66,7 @@ services:
       context: .
       dockerfile: Dockerfile
     command: alembic upgrade head
+    logging: *default-logging
     env_file: .env
     environment:
       - DATABASE_URL=postgresql://insider:insider_pass@postgres:5432/insider_detection
@@ -61,6 +82,7 @@ services:
       dockerfile: Dockerfile
     command: python -m ingestion.main
     restart: unless-stopped
+    logging: *default-logging
     env_file: .env
     environment:
       - REDIS_URL=redis://redis:6379/0
@@ -79,6 +101,7 @@ services:
       context: .
       dockerfile: Dockerfile
     command: python -m ingestion.backfill_runner
+    logging: *default-logging
     env_file: .env
     environment:
       - REDIS_URL=redis://redis:6379/0
@@ -99,6 +122,7 @@ services:
       sh -c "poetry run alembic upgrade head &&
             python -m queue_system"
     restart: unless-stopped
+    logging: *default-logging
     env_file: .env
     environment:
       - REDIS_URL=redis://redis:6379/0
@@ -122,6 +146,7 @@ services:
     container_name: python_api
     command: uvicorn api.main:app --host 0.0.0.0 --port 8000
     restart: unless-stopped
+    logging: *default-logging
     env_file: .env
     environment:
       - REDIS_URL=redis://redis:6379/0
@@ -145,6 +170,7 @@ services:
       context: .
       dockerfile: Dockerfile.inference
       network: host
+    logging: *default-logging
     env_file: .env
     environment:
       - POSTGRES_HOST=postgres
@@ -172,6 +198,7 @@ services:
       dockerfile: Dockerfile
     command: poetry run celery -A workers.celery_app worker --loglevel=info
     restart: unless-stopped
+    logging: *default-logging
     env_file: .env
     environment:
       - REDIS_URL=redis://redis:6379/0
@@ -202,6 +229,7 @@ services:
       dockerfile: Dockerfile
     command: celery -A workers.celery_app beat --loglevel=info
     restart: unless-stopped
+    logging: *default-logging
     env_file: .env
     environment:
       - REDIS_URL=redis://redis:6379/0
@@ -227,6 +255,7 @@ services:
       dockerfile: Dockerfile
     command: uvicorn dashboard.main:app --host 0.0.0.0 --port 8000 --reload
     restart: unless-stopped
+    logging: *default-logging
     env_file: .env
     environment:
       - REDIS_URL=redis://redis:6379/0
@@ -252,6 +281,7 @@ services:
     build: ./mail-monitor
     container_name: mail-monitor
     restart: unless-stopped
+    logging: *default-logging
     environment:
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
       - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
