@@ -1,0 +1,46 @@
+# Contexto de build: excluir todo lo que no hace falta dentro de la imagen.
+# Sin esto, `COPY . .` mete cientos de MB (logs, .git, caches) → builds lentos
+# que en la Pi de 2GB saturan RAM/IO y tiran la conexión SSH.
+
+# Historial git (grande, innecesario en runtime)
+.git
+.gitignore
+
+# Logs de la aplicación (en la Pi llegaron a 600MB) — se montan por volumen
+logs/
+*.log
+
+# Secretos: se inyectan en runtime vía env_file, NO deben quedar en la imagen
+.env
+.env.*
+!.env.example
+
+# Caches de Python / herramientas
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Entornos virtuales locales
+.venv/
+venv/
+
+# Backups y datos locales
+polymarket-backup/
+*.rdb
+*.sqlite
+*.db
+
+# Editor / SO
+.vscode/
+.idea/
+.DS_Store
+
+# Documentación (no se necesita en runtime)
+docs/
+*.md
+!README.md
