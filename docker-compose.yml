@@ -113,6 +113,9 @@ services:
         condition: service_healthy
     networks:
       - proyect_net
+    profiles:
+      - tools          # NO arranca con `up`; solo con `--profile tools`. Evita
+                       # que cada `up` relance un backfill que reinunda raw_data.
 
   orchestrator:
     build:
