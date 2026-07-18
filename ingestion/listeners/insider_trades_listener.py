@@ -22,6 +22,7 @@ from ingestion.collectors.markets_collector import MarketsCollector
 from ingestion.normalizers.data_normalizer import DataNormalizer
 from ingestion.config_store import CategoriesStore
 from ingestion.interests_registry import InterestsRegistry
+from ingestion.monitored_wallets_store import MonitoredWalletsStore
 from contracts.raw_market_data import InsiderTradeCommand
 
 logger = structlog.get_logger()
@@ -56,6 +57,7 @@ class InsiderTradesListener:
         markets_collector: MarketsCollector | None = None,
         normalizer: DataNormalizer | None = None,
         registry: "InterestsRegistry | None" = None,
+        monitored_store: "MonitoredWalletsStore | None" = None,
     ):
         self.settings = get_settings()
         self.publisher = publisher or RedisPublisher()
@@ -65,6 +67,13 @@ class InsiderTradesListener:
             categorias_de_interes=self.settings.categorias_de_interes,
         )
         self.logger = logger.bind(component="l2_insider_trades")
+
+        # Durable mirror of _monitored_wallets below (JSON file, NOT Redis —
+        # see monitored_wallets_store.py for why). Best-effort: on failure
+        # this logs and L2 keeps operating purely in memory.
+        self.monitored_store = monitored_store or MonitoredWalletsStore(
+            self.settings.monitored_wallets_path
+        )
 
         # Monitored wallets: wallet_address → MonitoredWallet
         self._monitored_wallets: dict[str, MonitoredWallet] = {}
@@ -119,8 +128,8 @@ class InsiderTradesListener:
     # ================================================================
 
     async def _load_monitored_wallets(self) -> None:
-        """Rehydrate _monitored_wallets from Redis (mirrors L1's tracked markets)."""
-        persisted = await self.publisher.load_monitored_wallets()
+        """Rehydrate _monitored_wallets from the durable store."""
+        persisted = await self.monitored_store.load()
         for wallet, data in persisted.items():
             last_seen_ts = self.normalizer._parse_datetime_optional(
                 data.get("last_seen_ts")
@@ -141,6 +150,13 @@ class InsiderTradesListener:
             "categories_insider": info.categories_insider,
             "market_ids_insider": info.market_ids_insider,
             "last_seen_ts": info.last_seen_ts.isoformat() if info.last_seen_ts else None,
+        }
+
+    def _serialize_all(self) -> dict[str, dict]:
+        """Full _monitored_wallets dict, serialized for the durable store."""
+        return {
+            wallet: self._serialize_monitored(info)
+            for wallet, info in self._monitored_wallets.items()
         }
 
     async def run(self) -> None:
@@ -306,9 +322,7 @@ class InsiderTradesListener:
                 categories_insider=command.categories_insider,
                 market_ids_insider=command.market_ids_insider,
             )
-            await self.publisher.save_monitored_wallet(
-                wallet, self._serialize_monitored(self._monitored_wallets[wallet])
-            )
+            await self.monitored_store.save(self._serialize_all())
             self._stats["wallets_added"] += 1
             self.logger.info(
                 "wallet_added",
@@ -339,14 +353,12 @@ class InsiderTradesListener:
                     market_ids_insider=command.market_ids_insider,
                 )
                 self._stats["wallets_added"] += 1
-            await self.publisher.save_monitored_wallet(
-                wallet, self._serialize_monitored(self._monitored_wallets[wallet])
-            )
+            await self.monitored_store.save(self._serialize_all())
 
         elif command.command_type == "REMOVE_WALLET":
             if wallet in self._monitored_wallets:
                 del self._monitored_wallets[wallet]
-                await self.publisher.remove_monitored_wallet(wallet)
+                await self.monitored_store.save(self._serialize_all())
                 self._stats["wallets_removed"] += 1
                 self.logger.info(
                     "wallet_removed",
@@ -382,12 +394,14 @@ class InsiderTradesListener:
             wallets_count=len(wallets),
         )
 
+        any_updated = False
         for wallet_addr, info in wallets:
             if not self._running:
                 break
 
             try:
-                await self._poll_wallet_trades(wallet_addr, info)
+                if await self._poll_wallet_trades(wallet_addr, info):
+                    any_updated = True
             except Exception as e:
                 self.logger.warning(
                     "wallet_poll_failed",
@@ -395,11 +409,20 @@ class InsiderTradesListener:
                     error=str(e),
                 )
 
+        if any_updated:
+            # Un único save con todos los last_seen_ts actualizados de este
+            # sweep, no uno por wallet (evita ráfagas de escrituras a disco
+            # en la Pi cada 30s).
+            await self.monitored_store.save(self._serialize_all())
+
     async def _poll_wallet_trades(
         self, wallet: str, info: MonitoredWallet
-    ) -> None:
+    ) -> bool:
         """
         Fetch recent trades for a wallet, filter by categories, publish new ones.
+
+        Returns True if `info.last_seen_ts` was advanced (caller batches the
+        persist across the whole sweep instead of saving per wallet).
         """
         trades_raw = []
         try:
@@ -413,7 +436,7 @@ class InsiderTradesListener:
                 wallet=wallet[:10] + "...",
                 error=str(e),
             )
-            return
+            return False
 
         self.logger.debug(
             "wallet_trades_fetched",
@@ -422,7 +445,7 @@ class InsiderTradesListener:
         )
 
         if not trades_raw:
-            return
+            return False
 
         self._stats["trades_polled"] += len(trades_raw)
 
@@ -437,7 +460,7 @@ class InsiderTradesListener:
             new_trades.append(trade_raw)
 
         if not new_trades:
-            return
+            return False
 
         # Filter by market categories
         matching_trades = []
@@ -477,19 +500,17 @@ class InsiderTradesListener:
                 categories=info.categories_insider,
             )
 
-        # Update last_seen_ts to the most recent trade timestamp
-        if new_trades:
-            latest_ts = max(
-                self.normalizer._parse_datetime(t.get("timestamp"))
-                for t in new_trades
-                if t.get("timestamp")
-            )
-            info.last_seen_ts = latest_ts
-            # Persist so a restart doesn't re-poll from scratch (mitigated by
-            # ON CONFLICT DO NOTHING downstream, but wastes Data API calls).
-            await self.publisher.save_monitored_wallet(
-                wallet, self._serialize_monitored(info)
-            )
+        # Update last_seen_ts to the most recent trade timestamp. Persistence
+        # (so a restart doesn't re-poll from scratch — mitigated by ON
+        # CONFLICT DO NOTHING downstream, but wastes Data API calls) is
+        # batched by the caller across the whole poll sweep.
+        latest_ts = max(
+            self.normalizer._parse_datetime(t.get("timestamp"))
+            for t in new_trades
+            if t.get("timestamp")
+        )
+        info.last_seen_ts = latest_ts
+        return True
 
     # ================================================================
     # CATEGORY MATCHING

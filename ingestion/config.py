@@ -84,6 +84,32 @@ class IngestionSettings(BaseSettings):
         description="Path to the durable JSON file holding the category filter.",
     )
 
+    # Durable files for L1's market-tracking state (tracked + processed
+    # markets). Same reasoning as config_store_path: Redis here is in-memory
+    # only, so this used to reset on every redeploy, forcing L1 to
+    # rediscover every open market from scratch.
+    tracked_markets_path: str = Field(
+        default="/data/config/tracked_markets.json",
+        validation_alias="TRACKED_MARKETS_PATH",
+        description="Path to the durable JSON file holding L1's in-flight tracked markets.",
+    )
+    processed_markets_path: str = Field(
+        default="/data/config/processed_markets.log",
+        validation_alias="PROCESSED_MARKETS_PATH",
+        description="Path to the durable append-only log of L1's processed market ids.",
+    )
+
+    # Durable file for L2's monitored-insider-wallets state. Same reasoning:
+    # Redis here is in-memory only, so this used to reset on every redeploy,
+    # silently stopping tracking of every insider already detected until the
+    # next re-detection. Also read directly (sync) by
+    # scripts/seed_monitored_wallets.py in the orchestrator container.
+    monitored_wallets_path: str = Field(
+        default="/data/config/monitored_wallets.json",
+        validation_alias="MONITORED_WALLETS_PATH",
+        description="Path to the durable JSON file holding L2's monitored insider wallets.",
+    )
+
     # ===================
     # L1: Market Close Listener
     # ===================

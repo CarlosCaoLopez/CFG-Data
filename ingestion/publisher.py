@@ -35,20 +35,13 @@ INSIDER_TRADES_MAXLEN = 2000
 # borraba en cada `docker compose down`, reseteando el filtro. Ahora vive en un
 # fichero JSON durable gestionado por ingestion/config_store.py (CategoriesStore).
 
-# Claves Redis donde L1 persiste su estado de seguimiento de mercados.
-# Viven en el volumen durable de Redis, así que sobreviven a down/build/up:
-# tras un redespliegue L1 rehidrata su lista en vez de redescubrir desde cero.
-#   - tracked:markets  (hash)  condition_id -> JSON del dict del market
-#   - tracked:processed (set)  condition_ids ya cerrados/procesados
-TRACKED_MARKETS_KEY = "tracked:markets"
-PROCESSED_MARKETS_KEY = "tracked:processed"
+# NOTA: el estado de seguimiento de L1 (tracked/processed markets) TAMPOCO se
+# persiste aquí por el mismo motivo. Vive en ficheros durables gestionados por
+# ingestion/tracked_markets_store.py (TrackedMarketsStore).
 
-# Clave Redis donde L2 persiste su estado de seguimiento de wallets insider
-# (mismo patrón que TRACKED_MARKETS_KEY para L1): hash wallet -> JSON con
-# {categories_insider, market_ids_insider, last_seen_ts}. Sin esto,
-# _monitored_wallets vive solo en memoria y un redeploy apaga el seguimiento
-# de todos los insiders ya detectados hasta la próxima re-detección.
-MONITORED_WALLETS_KEY = "monitored:wallets"
+# NOTA: el estado de wallets insider monitorizadas por L2 TAMPOCO se persiste
+# aquí por el mismo motivo. Vive en un fichero durable gestionado por
+# ingestion/monitored_wallets_store.py (MonitoredWalletsStore).
 
 
 class RedisPublisher(QueueProducer):
@@ -295,142 +288,6 @@ class RedisPublisher(QueueProducer):
                 error=str(e),
             )
             raise
-
-    # ================================================================
-    # PERSISTENCIA DE MERCADOS EN SEGUIMIENTO (L1)
-    # ================================================================
-    # Espejo en Redis de los dicts/sets en memoria de MarketCloseListener.
-    # Todas las escrituras son defensivas: si Redis falla, se loguea un
-    # warning y el sistema sigue operando en memoria (la persistencia es
-    # best-effort, no bloquea la ingesta).
-
-    async def load_tracked_markets(self) -> dict[str, dict]:
-        """
-        Rehidrata la lista de mercados en seguimiento desde Redis.
-
-        Returns:
-            dict condition_id -> dict del market. {} si vacío o error.
-        """
-        try:
-            redis_client = await self._get_redis()
-            raw_map = await redis_client.hgetall(TRACKED_MARKETS_KEY)
-        except Exception as e:
-            self.logger.warning("load_tracked_markets_failed", error=str(e))
-            return {}
-
-        result: dict[str, dict] = {}
-        for field, value in raw_map.items():
-            if isinstance(field, bytes):
-                field = field.decode()
-            if isinstance(value, bytes):
-                value = value.decode()
-            try:
-                result[field] = json.loads(value)
-            except (json.JSONDecodeError, TypeError):
-                self.logger.warning("tracked_market_parse_failed", condition_id=field)
-        return result
-
-    async def save_tracked_market(self, condition_id: str, market: dict) -> None:
-        """Persiste (o actualiza) un market en seguimiento en Redis."""
-        try:
-            redis_client = await self._get_redis()
-            await redis_client.hset(
-                TRACKED_MARKETS_KEY, condition_id, json.dumps(market, default=str)
-            )
-        except Exception as e:
-            self.logger.warning(
-                "save_tracked_market_failed", condition_id=condition_id, error=str(e)
-            )
-
-    async def remove_tracked_market(self, condition_id: str) -> None:
-        """Elimina un market de la lista de seguimiento persistida."""
-        try:
-            redis_client = await self._get_redis()
-            await redis_client.hdel(TRACKED_MARKETS_KEY, condition_id)
-        except Exception as e:
-            self.logger.warning(
-                "remove_tracked_market_failed", condition_id=condition_id, error=str(e)
-            )
-
-    async def load_processed_markets(self) -> set[str]:
-        """
-        Rehidrata el set de mercados ya procesados desde Redis.
-
-        Returns:
-            set de condition_ids. set() si vacío o error.
-        """
-        try:
-            redis_client = await self._get_redis()
-            members = await redis_client.smembers(PROCESSED_MARKETS_KEY)
-        except Exception as e:
-            self.logger.warning("load_processed_markets_failed", error=str(e))
-            return set()
-
-        return {m.decode() if isinstance(m, bytes) else m for m in members}
-
-    async def add_processed_market(self, condition_id: str) -> None:
-        """Marca un market como procesado en Redis (idempotente)."""
-        try:
-            redis_client = await self._get_redis()
-            await redis_client.sadd(PROCESSED_MARKETS_KEY, condition_id)
-        except Exception as e:
-            self.logger.warning(
-                "add_processed_market_failed", condition_id=condition_id, error=str(e)
-            )
-
-    # ================================================================
-    # Espejo en Redis del dict _monitored_wallets de InsiderTradesListener
-    # (L2). Mismo patrón defensivo que el bloque de tracked markets arriba:
-    # si Redis falla, se loguea un warning y se sigue en memoria.
-
-    async def load_monitored_wallets(self) -> dict[str, dict]:
-        """
-        Rehidrata la lista de wallets insider monitorizadas desde Redis.
-
-        Returns:
-            dict wallet -> {categories_insider, market_ids_insider, last_seen_ts}.
-            {} si vacío o error.
-        """
-        try:
-            redis_client = await self._get_redis()
-            raw_map = await redis_client.hgetall(MONITORED_WALLETS_KEY)
-        except Exception as e:
-            self.logger.warning("load_monitored_wallets_failed", error=str(e))
-            return {}
-
-        result: dict[str, dict] = {}
-        for field, value in raw_map.items():
-            if isinstance(field, bytes):
-                field = field.decode()
-            if isinstance(value, bytes):
-                value = value.decode()
-            try:
-                result[field] = json.loads(value)
-            except (json.JSONDecodeError, TypeError):
-                self.logger.warning("monitored_wallet_parse_failed", wallet=field)
-        return result
-
-    async def save_monitored_wallet(self, wallet: str, data: dict) -> None:
-        """Persiste (o actualiza) una wallet monitorizada en Redis."""
-        try:
-            redis_client = await self._get_redis()
-            await redis_client.hset(
-                MONITORED_WALLETS_KEY, wallet, json.dumps(data, default=str)
-            )
-        except Exception as e:
-            self.logger.warning(
-                "save_monitored_wallet_failed", wallet=wallet, error=str(e)
-            )
-
-    async def remove_monitored_wallet(self, wallet: str) -> None:
-        """Elimina una wallet de la lista de seguimiento persistida."""
-        try:
-            redis_client = await self._get_redis()
-            await redis_client.hdel(MONITORED_WALLETS_KEY, wallet)
-        except Exception as e:
-            self.logger.warning(
-                "remove_monitored_wallet_failed", wallet=wallet, error=str(e)
-            )
 
     async def health_check(self) -> bool:
         """

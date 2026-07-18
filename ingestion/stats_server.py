@@ -34,8 +34,6 @@ async def get_stats() -> dict:
             "question": meta.get("question", ""),
             "category": meta.get("category"),
             "tags": meta.get("tags", []),
-            "volume_usdc": meta.get("volume_usdc", 0),
-            "end_date": meta.get("end_date").isoformat() if meta.get("end_date") else None,
         }
         for market_id, meta in _l1_ref._tracked_markets.items()
     ]
@@ -54,9 +52,10 @@ async def get_stats() -> dict:
 async def get_monitored_wallet(wallet: str) -> dict:
     """
     Live L2 monitoring state for a single wallet (in-memory, rehydrated from
-    Redis at startup — see InsiderTradesListener._load_monitored_wallets).
-    Used by the dashboard to show whether a detected insider's trades are
-    actively being polled and when it was last seen trading.
+    the durable store at startup — see InsiderTradesListener._load_monitored_wallets
+    and monitored_wallets_store.py). Used by the dashboard to show whether a
+    detected insider's trades are actively being polled and when it was last
+    seen trading.
     """
     if _l2_ref is None:
         return {"monitored": False}

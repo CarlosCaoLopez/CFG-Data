@@ -15,6 +15,7 @@ from ingestion.config import get_settings
 from ingestion.publisher import RedisPublisher
 from ingestion.config_store import CategoriesStore
 from ingestion.interests_registry import InterestsRegistry
+from ingestion.tracked_markets_store import TrackedMarketsStore
 from ingestion.collectors.markets_collector import MarketsCollector
 from ingestion.collectors.trades_collector import TradesCollector
 from ingestion.collectors.wallet_age_collector import WalletAgeCollector
@@ -49,6 +50,7 @@ class MarketCloseListener:
         wallet_age_collector: WalletAgeCollector | None = None,
         normalizer: DataNormalizer | None = None,
         registry: "InterestsRegistry | None" = None,
+        tracked_store: "TrackedMarketsStore | None" = None,
     ):
         self.settings = get_settings()
         self.publisher = publisher or RedisPublisher()
@@ -60,7 +62,17 @@ class MarketCloseListener:
         )
         self.logger = logger.bind(component="l1_market_close")
 
-        # Tracked markets: condition_id → {metadata dict, tags, category}
+        # Durable mirror of the tracking state below (JSON file, NOT Redis —
+        # see tracked_markets_store.py for why). Best-effort: on failure this
+        # logs and L1 keeps operating purely in memory.
+        self.tracked_store = tracked_store or TrackedMarketsStore(
+            self.settings.tracked_markets_path,
+            self.settings.processed_markets_path,
+        )
+
+        # Tracked markets: condition_id → {question, category, tags} (minimal
+        # shape — just enough for category-filter matching + the dashboard's
+        # tracked-markets widget, see stats_server.py)
         self._tracked_markets: dict[str, dict] = {}
         # Already processed (closed and published)
         self._processed_markets: set[str] = set()
@@ -108,15 +120,17 @@ class MarketCloseListener:
         self.normalizer.set_interests(new_categories)
         to_remove = [
             mid for mid, meta in list(self._tracked_markets.items())
-            if not self._matches_categories(meta)
+            if not self._categories_match(meta.get("category"), meta.get("tags") or [])
         ]
         for mid in to_remove:
             del self._tracked_markets[mid]
+        if to_remove:
             # Este callback es síncrono (lo invoca registry._notify), así que la
             # persistencia se programa fire-and-forget. Seguro: cuando hay markets
             # que podar el event loop ya está corriendo (viene de registry.set());
             # en el primer disparo de subscribe() en __init__ la lista está vacía.
-            asyncio.create_task(self.publisher.remove_tracked_market(mid))
+            # Un único save con el dict ya podado, no uno por market eliminado.
+            asyncio.create_task(self.tracked_store.save_tracked(self._tracked_markets))
         self.logger.info(
             "interests_applied",
             new_interests=list(self._interests),
@@ -127,8 +141,9 @@ class MarketCloseListener:
         """
         Replace the category filter via the shared registry.
 
-        Delegates to the registry, which persists to Redis and notifies every
-        subscriber (this L1 plus L2), so the change propagates live everywhere.
+        Delegates to the registry, which persists to the durable store and
+        notifies every subscriber (this L1 plus L2), so the change propagates
+        live everywhere.
         """
         await self.registry.set(new_categories)
 
@@ -143,14 +158,15 @@ class MarketCloseListener:
     async def run(self) -> None:
         """Run all three loops concurrently until stopped."""
         self._running = True
-        # Load persisted filter from Redis before starting (survives redeploys).
+        # Load persisted filter before starting (survives redeploys).
         # If a shared registry was injected, main.py loads it once for L1 + L2.
         if self._owns_registry:
             await self.registry.load()
-        # Rehidrata la lista de mercados en seguimiento desde Redis para que un
-        # redespliegue no borre el estado y obligue a redescubrir desde cero.
-        self._tracked_markets = await self.publisher.load_tracked_markets()
-        self._processed_markets = await self.publisher.load_processed_markets()
+        # Rehidrata la lista de mercados en seguimiento desde el fichero durable
+        # para que un redespliegue no borre el estado y obligue a redescubrir
+        # desde cero.
+        self._tracked_markets = await self.tracked_store.load_tracked()
+        self._processed_markets = await self.tracked_store.load_processed()
         self.logger.info(
             "l1_tracked_state_restored",
             tracked=len(self._tracked_markets),
@@ -332,15 +348,22 @@ class MarketCloseListener:
                         market_raw["events"][0]["tags"] = event_tags
 
             # Check categories
-            if self._matches_categories(market_raw):
-                self._tracked_markets[condition_id] = market_raw
-                await self.publisher.save_tracked_market(condition_id, market_raw)
+            category, tags = self._extract_category_tags(market_raw)
+            if self._categories_match(category, tags):
+                self._tracked_markets[condition_id] = {
+                    "question": market_raw.get("question", ""),
+                    "category": category,
+                    "tags": tags,
+                }
                 discovered += 1
                 self._stats["markets_discovered_gamma"] += 1
             else:
                 self._stats["markets_filtered_out"] += 1
 
         if discovered > 0:
+            # Un único save con todo el dict al final del sweep, no uno por
+            # market descubierto (evita ráfagas de escrituras a disco en la Pi).
+            await self.tracked_store.save_tracked(self._tracked_markets)
             self.logger.info(
                 "gamma_discovery_completed",
                 new_markets=discovered,
@@ -400,6 +423,7 @@ class MarketCloseListener:
             self.logger.error("close_detection_error", error=str(e))
             return
 
+        any_closed = False
         for condition_id, market in closed_markets.items():
             if not self._running:
                 break
@@ -434,8 +458,8 @@ class MarketCloseListener:
                 await self._handle_market_close(market)
                 self._processed_markets.add(condition_id)
                 self._tracked_markets.pop(condition_id, None)
-                await self.publisher.add_processed_market(condition_id)
-                await self.publisher.remove_tracked_market(condition_id)
+                await self.tracked_store.add_processed(condition_id)
+                any_closed = True
 
             except Exception as e:
                 self.logger.warning(
@@ -443,6 +467,11 @@ class MarketCloseListener:
                     condition_id=condition_id[:20] + "...",
                     error=str(e),
                 )
+
+        if any_closed:
+            # Un único save con el dict ya sin los markets cerrados de este
+            # sweep, no uno por cierre detectado.
+            await self.tracked_store.save_tracked(self._tracked_markets)
 
     async def _handle_market_close(self, market_raw: dict) -> None:
         """
@@ -515,28 +544,39 @@ class MarketCloseListener:
     # CATEGORY FILTERING
     # ================================================================
 
-    def _matches_categories(self, market_raw: dict) -> bool:
-        """Check if a raw market dict matches CATEGORIAS_DE_INTERES."""
-        # Check direct category field
-        category = (market_raw.get("category") or "").lower()
-        if category and category in self._interests:
-            return True
+    def _categories_match(self, category: str | None, tags: list[str]) -> bool:
+        """Check if a flat (category, tags) pair matches CATEGORIAS_DE_INTERES.
 
-        # Check tags from events
+        Shared by _matches_categories (raw Gamma dicts, extracted first) and
+        the pruning check on the already-minimal persisted tracked-market dict.
+        """
+        if category and category.lower() in self._interests:
+            return True
+        return any(tag and tag.lower() in self._interests for tag in tags)
+
+    @staticmethod
+    def _extract_category_tags(market_raw: dict) -> tuple[str | None, list[str]]:
+        """Pull (category, flat tag labels) out of a raw Gamma market dict."""
+        category = market_raw.get("category")
+        tags: list[str] = []
         events = market_raw.get("events", [])
         for event in events:
             if not isinstance(event, dict):
                 continue
             for tag in event.get("tags", []):
-                label = ""
+                label = None
                 if isinstance(tag, dict):
-                    label = (tag.get("label") or tag.get("slug") or "").lower()
+                    label = tag.get("label") or tag.get("slug")
                 elif isinstance(tag, str):
-                    label = tag.lower()
-                if label and label in self._interests:
-                    return True
+                    label = tag
+                if label:
+                    tags.append(label)
+        return category, tags
 
-        return False
+    def _matches_categories(self, market_raw: dict) -> bool:
+        """Check if a raw Gamma market dict matches CATEGORIAS_DE_INTERES."""
+        category, tags = self._extract_category_tags(market_raw)
+        return self._categories_match(category, tags)
 
     def _metadata_matches_categories(self, metadata: RawMarketMetadata) -> bool:
         """Check if normalized metadata matches CATEGORIAS_DE_INTERES."""
@@ -551,14 +591,12 @@ class MarketCloseListener:
     async def _track_market_from_metadata(self, metadata: RawMarketMetadata) -> None:
         """Add a market to tracked set from normalized metadata."""
         market_dict = {
-            "conditionId": metadata.market_id,
             "question": metadata.question,
-            "endDate": metadata.end_date.isoformat(),
             "category": metadata.category,
-            "tags": metadata.tags,
+            "tags": metadata.tags or [],
         }
         self._tracked_markets[metadata.market_id] = market_dict
-        await self.publisher.save_tracked_market(metadata.market_id, market_dict)
+        await self.tracked_store.save_tracked(self._tracked_markets)
         self.logger.debug(
             "market_tracked",
             condition_id=metadata.market_id[:20] + "...",

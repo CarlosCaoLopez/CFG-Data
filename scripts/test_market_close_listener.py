@@ -193,7 +193,7 @@ def test_mark_last_trade():
     print("\n  ✅ All mark_last_trade tests passed")
 
 
-def test_track_market_from_metadata():
+async def test_track_market_from_metadata():
     """Test that _track_market_from_metadata adds to tracked dict."""
     print("\n" + "=" * 60)
     print("TEST 5: Track market from metadata")
@@ -212,16 +212,19 @@ def test_track_market_from_metadata():
     )
 
     assert listener.tracked_count == 0
-    listener._track_market_from_metadata(meta)
+    await listener._track_market_from_metadata(meta)
     assert listener.tracked_count == 1
     assert "0xtest123" in listener._tracked_markets
 
+    # Minimal persisted shape: just question/category/tags (see
+    # tracked_markets_store.py) — no conditionId (redundant with the dict key)
+    # or the full raw Gamma blob.
     tracked = listener._tracked_markets["0xtest123"]
-    assert tracked["conditionId"] == "0xtest123"
+    assert tracked["question"] == "Test market?"
     assert tracked["category"] == "Crypto"
     assert tracked["tags"] == ["Bitcoin", "BTC"]
 
-    print(f"  Tracked market: {tracked['conditionId'][:20]}...")
+    print(f"  Tracked market: 0xtest123...")
     print(f"  Category: {tracked['category']}")
     print(f"  Tags: {tracked['tags']}")
 
@@ -327,7 +330,7 @@ def main():
     test_category_filtering_metadata()
     test_winning_outcome()
     test_mark_last_trade()
-    test_track_market_from_metadata()
+    asyncio.run(test_track_market_from_metadata())
     test_config_categories()
 
     # Integration test (live API)

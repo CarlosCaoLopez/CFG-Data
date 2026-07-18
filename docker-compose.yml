@@ -92,9 +92,12 @@ services:
     networks:
       - proyect_net
     volumes:
-      # Config durable (filtro de categorías). En volumen propio, NO en Redis:
-      # Redis corre in-memory (--save "") y se borraba en cada `down`, reseteando
-      # el filtro. Ver ingestion/config_store.py. Ruta = CONFIG_STORE_PATH default.
+      # Config + estado de L1/L2 durables (filtro de categorías,
+      # tracked/processed markets, monitored wallets). En volumen propio, NO
+      # en Redis: Redis corre in-memory (--save "") y se borraba en cada
+      # `down`, reseteando los tres. Ver ingestion/config_store.py,
+      # ingestion/tracked_markets_store.py e
+      # ingestion/monitored_wallets_store.py.
       - config_data:/data/config
     deploy:
       resources:
@@ -142,6 +145,11 @@ services:
       - DATABASE_URL=postgresql://insider:insider_pass@postgres:5432/insider_detection
     volumes:
       - .:/app
+      # Solo lectura: scripts.seed_monitored_wallets lee monitored_wallets.json
+      # directamente para no re-sembrar wallets ya monitorizadas (ver
+      # ingestion/monitored_wallets_store.py). No lo escribe nunca; eso lo
+      # hace el ingestion vía comandos en insider_commands.
+      - config_data:/data/config:ro
     depends_on:
       redis:
         condition: service_healthy

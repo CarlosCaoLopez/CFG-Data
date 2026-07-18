@@ -403,34 +403,31 @@ async def test_real_wallet_polling():
 async def test_monitored_wallets_persistence():
     """
     Integration test: verify _monitored_wallets survives a simulated
-    redeploy — ADD_WALLET must mirror to Redis (monitored:wallets hash) and
-    a fresh InsiderTradesListener instance must rehydrate from it on load,
-    including last_seen_ts. REMOVE_WALLET must clear the Redis entry too.
+    redeploy — ADD_WALLET must mirror to the durable JSON store
+    (monitored_wallets.json, see ingestion/monitored_wallets_store.py) and a
+    fresh InsiderTradesListener instance must rehydrate from it on load,
+    including last_seen_ts. REMOVE_WALLET must clear the persisted entry too.
+
+    Uses a temp file (not the container's real /data/config path) so the
+    test is self-contained and doesn't touch production state.
     """
     print("\n" + "=" * 60)
     print("TEST 8: Monitored wallets persistence (survives redeploy)")
     print("=" * 60)
 
+    import tempfile
+    import os
+    from ingestion.monitored_wallets_store import MonitoredWalletsStore
+
     try:
-        from ingestion.publisher import RedisPublisher, MONITORED_WALLETS_KEY
-        from ingestion.config import get_settings
-
-        settings = get_settings()
-        publisher = RedisPublisher()
-
-        healthy = await publisher.health_check()
-        if not healthy:
-            print("  ⚠️ Skipped: Redis not reachable")
-            return
+        tmp_dir = tempfile.mkdtemp()
+        store = MonitoredWalletsStore(os.path.join(tmp_dir, "monitored_wallets.json"))
 
         test_wallet = "0xPersistTest999"
         test_wallet_lower = test_wallet.lower()
 
-        # Cleanup any leftover state from a previous run
-        await publisher.remove_monitored_wallet(test_wallet_lower)
-
-        # Step 1: ADD_WALLET on listener A must mirror to Redis
-        listener_a = InsiderTradesListener(publisher=publisher)
+        # Step 1: ADD_WALLET on listener A must mirror to the store
+        listener_a = InsiderTradesListener(monitored_store=store)
         cmd_data = {
             b"payload": InsiderTradeCommand(
                 wallet=test_wallet,
@@ -442,24 +439,21 @@ async def test_monitored_wallets_persistence():
         assert test_wallet_lower in listener_a._monitored_wallets
         print("  ADD_WALLET processed on listener A ✅")
 
-        persisted = await publisher.load_monitored_wallets()
+        persisted = await store.load()
         assert test_wallet_lower in persisted
         assert persisted[test_wallet_lower]["categories_insider"] == ["Sports", "Crypto"]
-        print(f"  Mirrored to Redis hash '{MONITORED_WALLETS_KEY}' ✅")
+        print("  Mirrored to monitored_wallets.json ✅")
 
         # Simulate last_seen_ts being updated by polling, then persisted
         listener_a._monitored_wallets[test_wallet_lower].last_seen_ts = datetime(
             2026, 1, 15, 12, 0, tzinfo=timezone.utc
         )
-        await publisher.save_monitored_wallet(
-            test_wallet_lower,
-            listener_a._serialize_monitored(listener_a._monitored_wallets[test_wallet_lower]),
-        )
+        await store.save(listener_a._serialize_all())
         print("  last_seen_ts persisted ✅")
 
         # Step 2: a FRESH listener instance (simulating a redeploy) must
         # rehydrate the wallet, its categories, and its last_seen_ts.
-        listener_b = InsiderTradesListener(publisher=publisher)
+        listener_b = InsiderTradesListener(monitored_store=store)
         assert listener_b.monitored_count == 0
         await listener_b._load_monitored_wallets()
         assert test_wallet_lower in listener_b._monitored_wallets
@@ -469,7 +463,7 @@ async def test_monitored_wallets_persistence():
         assert rehydrated.last_seen_ts.year == 2026
         print("  Fresh listener rehydrated wallet + categories + last_seen_ts ✅")
 
-        # Step 3: REMOVE_WALLET must clear Redis too, not just memory
+        # Step 3: REMOVE_WALLET must clear the store too, not just memory
         cmd_data_remove = {
             b"payload": InsiderTradeCommand(
                 wallet=test_wallet,
@@ -480,11 +474,10 @@ async def test_monitored_wallets_persistence():
         await listener_b._process_command(b"2-0", cmd_data_remove)
         assert test_wallet_lower not in listener_b._monitored_wallets
 
-        persisted_after_remove = await publisher.load_monitored_wallets()
+        persisted_after_remove = await store.load()
         assert test_wallet_lower not in persisted_after_remove
-        print("  REMOVE_WALLET cleared Redis entry ✅")
+        print("  REMOVE_WALLET cleared persisted entry ✅")
 
-        await publisher.close()
         print("\n  ✅ Monitored wallets persistence test passed")
 
     except Exception as e:
