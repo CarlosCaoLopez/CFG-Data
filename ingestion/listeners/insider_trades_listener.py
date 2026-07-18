@@ -20,6 +20,7 @@ from ingestion.publisher import RedisPublisher
 from ingestion.collectors.trades_collector import TradesCollector
 from ingestion.collectors.markets_collector import MarketsCollector
 from ingestion.normalizers.data_normalizer import DataNormalizer
+from ingestion.config_store import CategoriesStore
 from ingestion.interests_registry import InterestsRegistry
 from contracts.raw_market_data import InsiderTradeCommand
 
@@ -89,7 +90,8 @@ class InsiderTradesListener:
         # categories_insider (from T3) remain the actual monitoring filter.
         self._owns_registry = registry is None
         self.registry = registry or InterestsRegistry(
-            self.publisher, self.settings.categorias_de_interes
+            CategoriesStore(self.settings.config_store_path),
+            self.settings.categorias_de_interes,
         )
         self.registry.subscribe(self._on_interests_changed)
 

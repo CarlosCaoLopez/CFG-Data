@@ -3,12 +3,15 @@ Runtime source of truth for CATEGORIAS_DE_INTERES (the category filter).
 
 Shared by every ingestion consumer that filters by category (L1, L2, ...).
 Responsibilities:
-  - Persist the filter to Redis (durable volume) so edits survive redeploys.
+  - Persist the filter to a durable JSON file (CategoriesStore) so edits
+    survive redeploys. NOT Redis: Redis runs in-memory only here (--save ""),
+    so a `docker compose down` wiped it and reset the filter every redeploy.
   - Notify all subscribers on change, so a single edit propagates LIVE to
     every consumer (L1 pruning + normalizer, L2 normalizer, ...).
 
 The .env value (CATEGORIAS_DE_INTERES) is only the initial *seed*, used the
-first time Redis has no persisted key. Once seeded, Redis is authoritative.
+first time the store has no persisted value. Once seeded, the store is
+authoritative.
 
 Design: in-process observer. Subscribers register a `callback(list[str])` that
 fires (a) immediately on subscribe with the current value, and (b) on every
@@ -18,14 +21,14 @@ there is no code path that updates one consumer without notifying the rest.
 
 import structlog
 
-from ingestion.publisher import RedisPublisher
+from ingestion.config_store import CategoriesStore
 
 logger = structlog.get_logger()
 
 
 class InterestsRegistry:
-    def __init__(self, publisher: RedisPublisher, seed: list[str]):
-        self._publisher = publisher
+    def __init__(self, store: CategoriesStore, seed: list[str]):
+        self._store = store
         self._seed = list(seed)
         self._categories: list[str] = list(seed)
         self._subscribers: list = []
@@ -48,31 +51,31 @@ class InterestsRegistry:
 
     async def load(self) -> None:
         """
-        Seed the registry from Redis (durable) if present, else persist the
+        Seed the registry from the durable store if present, else persist the
         .env seed so future restarts have a value to read. Notifies subscribers.
         """
         try:
-            persisted = await self._publisher.get_categories_config()
+            persisted = await self._store.get()
         except Exception as e:
             self.logger.warning("interests_load_failed", error=str(e))
             persisted = None
 
         if persisted:
             self._categories = persisted
-            self.logger.info("interests_loaded_from_redis", categories=persisted)
+            self.logger.info("interests_loaded_from_store", categories=persisted)
         else:
             try:
-                await self._publisher.set_categories_config(self._seed)
+                await self._store.set(self._seed)
                 self.logger.info("interests_seeded_from_env", categories=self._seed)
             except Exception as e:
                 self.logger.warning("interests_seed_failed", error=str(e))
         self._notify()
 
     async def set(self, categories: list[str]) -> None:
-        """Replace the filter: persist to Redis + notify all subscribers live."""
+        """Replace the filter: persist to the store + notify subscribers live."""
         self._categories = list(categories)
         try:
-            await self._publisher.set_categories_config(self._categories)
+            await self._store.set(self._categories)
         except Exception as e:
             self.logger.warning("interests_persist_failed", error=str(e))
         self._notify()

@@ -91,6 +91,11 @@ services:
       - redis
     networks:
       - proyect_net
+    volumes:
+      # Config durable (filtro de categorías). En volumen propio, NO en Redis:
+      # Redis corre in-memory (--save "") y se borraba en cada `down`, reseteando
+      # el filtro. Ver ingestion/config_store.py. Ruta = CONFIG_STORE_PATH default.
+      - config_data:/data/config
     deploy:
       resources:
         limits:
@@ -113,6 +118,10 @@ services:
         condition: service_healthy
     networks:
       - proyect_net
+    volumes:
+      # Solo lectura: el backfill respeta el filtro de categorías persistido,
+      # pero nunca lo modifica (lo hace el ingestion vía dashboard).
+      - config_data:/data/config:ro
     profiles:
       - tools          # NO arranca con `up`; solo con `--profile tools`. Evita
                        # que cada `up` relance un backfill que reinunda raw_data.
@@ -299,6 +308,7 @@ services:
 volumes:
   redis_data:
   postgres_data:
+  config_data:      # Config durable del ingestion (filtro de categorías)
 
 networks:
   proyect_net:

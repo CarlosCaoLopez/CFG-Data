@@ -15,6 +15,7 @@ import structlog
 import uvicorn
 
 from ingestion.config import get_settings
+from ingestion.config_store import CategoriesStore
 from ingestion.publisher import RedisPublisher
 from ingestion.interests_registry import InterestsRegistry
 from ingestion.listeners.market_close_listener import MarketCloseListener
@@ -57,10 +58,12 @@ async def main() -> None:
 
     logger.info("redis_connection_ok")
 
-    # Single shared category filter for both listeners: one Redis-backed source
-    # of truth, so an edit propagates live to L1 and L2 together (and survives
-    # redeploys). .env is only the seed for a fresh Redis.
-    registry = InterestsRegistry(publisher, settings.categorias_de_interes)
+    # Single shared category filter for both listeners: one durable source of
+    # truth (JSON file on a named volume), so an edit propagates live to L1 and
+    # L2 together and survives redeploys. .env is only the seed on first run.
+    # It is NOT Redis-backed: Redis runs in-memory here and would reset on down.
+    store = CategoriesStore(settings.config_store_path)
+    registry = InterestsRegistry(store, settings.categorias_de_interes)
     l1 = MarketCloseListener(publisher=publisher, registry=registry)
     l2 = InsiderTradesListener(publisher=publisher, registry=registry)
     # Load once now that both listeners have subscribed (notifies both).

@@ -13,6 +13,7 @@ from datetime import datetime, UTC
 
 from ingestion.config import get_settings
 from ingestion.publisher import RedisPublisher
+from ingestion.config_store import CategoriesStore
 from ingestion.interests_registry import InterestsRegistry
 from ingestion.collectors.markets_collector import MarketsCollector
 from ingestion.collectors.trades_collector import TradesCollector
@@ -90,7 +91,8 @@ class MarketCloseListener:
         # shared registry, it drives L1 + L2 together and loads once.
         self._owns_registry = registry is None
         self.registry = registry or InterestsRegistry(
-            self.publisher, self.settings.categorias_de_interes
+            CategoriesStore(self.settings.config_store_path),
+            self.settings.categorias_de_interes,
         )
         # Subscribe last: the callback touches attributes defined above.
         self.registry.subscribe(self._on_interests_changed)

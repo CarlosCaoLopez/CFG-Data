@@ -75,6 +75,15 @@ class IngestionSettings(BaseSettings):
         """Parse comma-separated string into list"""
         return [s.strip() for s in self.categorias_de_interes_str.split(",") if s.strip()]
 
+    # Durable JSON file for the live category filter. Lives on a named volume
+    # (see docker-compose ingestion service) so edits survive redeploys —
+    # Redis here is in-memory only and cannot hold this. .env is only the seed.
+    config_store_path: str = Field(
+        default="/data/config/categorias_de_interes.json",
+        validation_alias="CONFIG_STORE_PATH",
+        description="Path to the durable JSON file holding the category filter.",
+    )
+
     # ===================
     # L1: Market Close Listener
     # ===================

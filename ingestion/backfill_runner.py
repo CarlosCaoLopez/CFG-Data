@@ -8,6 +8,7 @@ from pathlib import Path
 from datetime import datetime, timezone
 
 from ingestion.config import get_settings
+from ingestion.config_store import CategoriesStore
 from ingestion.http_client import get_http_client
 from ingestion.collectors.markets_collector import MarketsCollector
 from ingestion.collectors.trades_collector import TradesCollector
@@ -85,15 +86,15 @@ class BackfillRunner:
         publisher = get_publisher()
         http_client = get_http_client()
 
-        # Respect the persisted category filter (dashboard edits live in Redis;
-        # .env is only the seed). No live updates needed here — backfill is a
-        # one-shot batch job, so a single read at startup is enough.
+        # Respect the persisted category filter (dashboard edits live in the
+        # durable JSON store; .env is only the seed). No live updates needed
+        # here — backfill is a one-shot batch job, so a single read is enough.
         if not self.dry_run:
             try:
-                persisted = await publisher.get_categories_config()
+                persisted = await CategoriesStore(self.settings.config_store_path).get()
                 if persisted:
                     self.normalizer.set_interests(persisted)
-                    logger.info("backfill_interests_loaded_from_redis", categories=persisted)
+                    logger.info("backfill_interests_loaded_from_store", categories=persisted)
             except Exception as e:
                 logger.warning("backfill_interests_load_failed", error=str(e))
 

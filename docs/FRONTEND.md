@@ -362,15 +362,17 @@ GET  http://ingestion:9001/config/categories   → {"categories": [...]}    # In
 POST http://ingestion:9001/config/categories    body: {"categories": [...]} # InterestsRegistry.set()
 ```
 
-`POST` → `InterestsRegistry.set()`: persiste en Redis (`RedisPublisher.set_categories_config()`) y notifica a L1+L2.
+`POST` → `InterestsRegistry.set()`: persiste en un **fichero JSON durable** (`CategoriesStore`, `ingestion/config_store.py`) y notifica a L1+L2.
+
+> **Por qué fichero y no Redis:** Redis corre in-memory (`--save "" --appendonly no` en `docker-compose.yml`), así que un `docker compose down` lo vacía y **reseteaba el filtro en cada redeploy**. La config es estado durable, no una cola transitoria, así que vive en su propio fichero (`/data/config/categorias_de_interes.json`, override con `CONFIG_STORE_PATH`) sobre el volumen `config_data`, independiente del ciclo de vida de Redis.
 
 **Carga en arranque (`InterestsRegistry.load()`, llamado por `main.py` tras suscribir L1+L2):**
-- Si la clave Redis existe → aplica esa lista y notifica (los cambios del dashboard sobreviven a redeploys).
-- Si no existe (Redis nuevo) → siembra la clave con `.env`/default, de modo que reinicios posteriores tengan algo que leer.
+- Si el fichero existe → aplica esa lista y notifica (los cambios del dashboard sobreviven a redeploys).
+- Si no existe (primer arranque) → siembra el fichero con `.env`/default, de modo que reinicios posteriores tengan algo que leer.
 
-> El `backfill_runner` (proceso one-shot, separado) también lee la clave de Redis al arrancar para respetar el filtro persistido; no necesita updates en vivo.
+> El `backfill_runner` (proceso one-shot, separado) también lee el fichero al arrancar para respetar el filtro persistido (monta `config_data` en `:ro`); no necesita updates en vivo.
 
-Consecuencia: tras el primer arranque, **la fuente de verdad en runtime es Redis, no el `.env`**. Para volver a `.env`, borrar la clave (`redis-cli DEL config:categorias_de_interes`) y reiniciar ingestion.
+Consecuencia: tras el primer arranque, **la fuente de verdad en runtime es el fichero `config_data`, no el `.env`**. Para volver a `.env`, borrar el fichero (`docker compose run --rm ingestion rm /data/config/categorias_de_interes.json`, o `docker volume rm cfg-data_config_data` con el stack parado) y reiniciar ingestion.
 
 ---
 
