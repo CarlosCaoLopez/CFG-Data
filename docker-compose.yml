@@ -123,6 +123,7 @@ services:
       dockerfile: Dockerfile
     command: >
       sh -c "poetry run alembic upgrade head &&
+            python -m scripts.seed_monitored_wallets &&
             python -m queue_system"
     restart: unless-stopped
     logging: *default-logging

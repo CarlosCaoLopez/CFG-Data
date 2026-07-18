@@ -102,6 +102,42 @@
     </div>
   </div>
 
+  <!-- L2 Stats -->
+  <div class="card mb-6">
+    <h3 class="text-sm font-semibold text-slate-300 mb-4">
+      L2 — Insider Trades Listener
+      <span x-show="!d.l1_stats" class="badge-red ml-2">Unavailable</span>
+    </h3>
+    <template x-if="d.l1_stats">
+      <div class="grid grid-cols-2 lg:grid-cols-5 gap-3">
+        <div class="bg-slate-700 rounded-lg p-3 text-center">
+          <p class="text-xl font-bold text-red-400" x-text="d.l1_stats.l2?.monitored_wallets ?? 0"></p>
+          <p class="text-xs text-slate-500">Wallets monitorizadas</p>
+        </div>
+        <div class="bg-slate-700 rounded-lg p-3 text-center">
+          <p class="text-xl font-bold text-blue-400" x-text="d.l1_stats.l2?.trades_polled ?? 0"></p>
+          <p class="text-xs text-slate-500">Trades polleados</p>
+        </div>
+        <div class="bg-slate-700 rounded-lg p-3 text-center">
+          <p class="text-xl font-bold text-emerald-400" x-text="d.l1_stats.l2?.trades_published ?? 0"></p>
+          <p class="text-xs text-slate-500">Trades publicados</p>
+        </div>
+        <div class="bg-slate-700 rounded-lg p-3 text-center">
+          <p class="text-xl font-bold text-indigo-400" x-text="d.l1_stats.l2?.commands_received ?? 0"></p>
+          <p class="text-xs text-slate-500">Comandos recibidos</p>
+        </div>
+        <div class="bg-slate-700 rounded-lg p-3 text-center">
+          <p class="text-xl font-bold text-slate-300">
+            <span class="text-emerald-400" x-text="d.l1_stats.l2?.wallets_added ?? 0"></span>
+            <span class="text-slate-500 text-sm">/</span>
+            <span class="text-red-400" x-text="d.l1_stats.l2?.wallets_removed ?? 0"></span>
+          </p>
+          <p class="text-xs text-slate-500">Altas / Bajas</p>
+        </div>
+      </div>
+    </template>
+  </div>
+
 </div>
 
 <script>
