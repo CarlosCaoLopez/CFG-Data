@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from dashboard.dependencies import get_session
 from dashboard.queries import insider_queries as q
+from dashboard import l1_stats_client
 
 router = APIRouter()
 
@@ -17,8 +18,14 @@ async def list_insiders(
 
 
 @router.get("/api/insiders/{wallet}")
-async def insider_detail(wallet: str, session: AsyncSession = Depends(get_session)):
-    data = await q.get_insider_detail(session, wallet)
+async def insider_detail(
+    wallet: str,
+    limit: int = 500,
+    offset: int = 0,
+    session: AsyncSession = Depends(get_session),
+):
+    data = await q.get_insider_detail(session, wallet, limit=limit, offset=offset)
     if not data:
         raise HTTPException(status_code=404, detail="Wallet not found")
+    data["l2_monitoring"] = await l1_stats_client.get_monitored_wallet(wallet)
     return data

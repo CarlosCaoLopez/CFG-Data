@@ -50,6 +50,30 @@ async def get_stats() -> dict:
     }
 
 
+@stats_app.get("/monitored/{wallet}")
+async def get_monitored_wallet(wallet: str) -> dict:
+    """
+    Live L2 monitoring state for a single wallet (in-memory, rehydrated from
+    Redis at startup — see InsiderTradesListener._load_monitored_wallets).
+    Used by the dashboard to show whether a detected insider's trades are
+    actively being polled and when it was last seen trading.
+    """
+    if _l2_ref is None:
+        return {"monitored": False}
+
+    info = _l2_ref._monitored_wallets.get(wallet.lower())
+    if info is None:
+        return {"monitored": False}
+
+    return {
+        "monitored": True,
+        "categories_insider": info.categories_insider,
+        "market_ids_insider": info.market_ids_insider,
+        "last_seen_ts": info.last_seen_ts.isoformat() if info.last_seen_ts else None,
+        "trades_published": info.trades_published,
+    }
+
+
 @stats_app.get("/config/categories")
 async def get_categories() -> dict:
     if _registry_ref is None:

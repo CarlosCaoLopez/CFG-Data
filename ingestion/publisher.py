@@ -43,6 +43,13 @@ CATEGORIES_CONFIG_KEY = "config:categorias_de_interes"
 TRACKED_MARKETS_KEY = "tracked:markets"
 PROCESSED_MARKETS_KEY = "tracked:processed"
 
+# Clave Redis donde L2 persiste su estado de seguimiento de wallets insider
+# (mismo patrón que TRACKED_MARKETS_KEY para L1): hash wallet -> JSON con
+# {categories_insider, market_ids_insider, last_seen_ts}. Sin esto,
+# _monitored_wallets vive solo en memoria y un redeploy apaga el seguimiento
+# de todos los insiders ya detectados hasta la próxima re-detección.
+MONITORED_WALLETS_KEY = "monitored:wallets"
+
 
 class RedisPublisher(QueueProducer):
     """
@@ -400,6 +407,60 @@ class RedisPublisher(QueueProducer):
         except Exception as e:
             self.logger.warning(
                 "add_processed_market_failed", condition_id=condition_id, error=str(e)
+            )
+
+    # ================================================================
+    # Espejo en Redis del dict _monitored_wallets de InsiderTradesListener
+    # (L2). Mismo patrón defensivo que el bloque de tracked markets arriba:
+    # si Redis falla, se loguea un warning y se sigue en memoria.
+
+    async def load_monitored_wallets(self) -> dict[str, dict]:
+        """
+        Rehidrata la lista de wallets insider monitorizadas desde Redis.
+
+        Returns:
+            dict wallet -> {categories_insider, market_ids_insider, last_seen_ts}.
+            {} si vacío o error.
+        """
+        try:
+            redis_client = await self._get_redis()
+            raw_map = await redis_client.hgetall(MONITORED_WALLETS_KEY)
+        except Exception as e:
+            self.logger.warning("load_monitored_wallets_failed", error=str(e))
+            return {}
+
+        result: dict[str, dict] = {}
+        for field, value in raw_map.items():
+            if isinstance(field, bytes):
+                field = field.decode()
+            if isinstance(value, bytes):
+                value = value.decode()
+            try:
+                result[field] = json.loads(value)
+            except (json.JSONDecodeError, TypeError):
+                self.logger.warning("monitored_wallet_parse_failed", wallet=field)
+        return result
+
+    async def save_monitored_wallet(self, wallet: str, data: dict) -> None:
+        """Persiste (o actualiza) una wallet monitorizada en Redis."""
+        try:
+            redis_client = await self._get_redis()
+            await redis_client.hset(
+                MONITORED_WALLETS_KEY, wallet, json.dumps(data, default=str)
+            )
+        except Exception as e:
+            self.logger.warning(
+                "save_monitored_wallet_failed", wallet=wallet, error=str(e)
+            )
+
+    async def remove_monitored_wallet(self, wallet: str) -> None:
+        """Elimina una wallet de la lista de seguimiento persistida."""
+        try:
+            redis_client = await self._get_redis()
+            await redis_client.hdel(MONITORED_WALLETS_KEY, wallet)
+        except Exception as e:
+            self.logger.warning(
+                "remove_monitored_wallet_failed", wallet=wallet, error=str(e)
             )
 
     async def health_check(self) -> bool:

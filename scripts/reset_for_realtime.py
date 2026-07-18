@@ -58,6 +58,7 @@ def delete_test_data(session) -> None:
     steps = [
         ("closed_market_variables", f"market_id = '{TEST_MARKET_ID}'"),
         ("insiders_trades",         f"market_id = '{TEST_MARKET_ID}'"),
+        ("insider_detections",      f"market_id = '{TEST_MARKET_ID}'"),
         ("trades",                  f"market_id = '{TEST_MARKET_ID}'"),
         ("markets",                 f"market_id = '{TEST_MARKET_ID}'"),
         ("wallets",                 f"address   = '{TEST_WALLET}'"),
@@ -77,7 +78,7 @@ def delete_all_data(session) -> None:
         "closed_market_variables",
         "insiders_trades",
         "trades",
-        "alerts",
+        "insider_detections",
         "markets",
         "wallets",
     ]

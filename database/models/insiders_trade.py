@@ -23,6 +23,10 @@ class InsidersTrade(Base):
     size_usdc: Mapped[Decimal] = mapped_column(Numeric)
     size_tokens: Mapped[Decimal] = mapped_column(Numeric)
     last_trade: Mapped[bool] = mapped_column(Boolean, default=False)
+    # True for trades snapshotted from `trades` at detection time (the ones
+    # that triggered the insider flag), before T4 deletes the market's trades.
+    # False for trades captured later by L2's ongoing polling.
+    is_detection_trade: Mapped[bool] = mapped_column(Boolean, default=False)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=datetime.now(UTC),

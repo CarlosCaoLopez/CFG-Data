@@ -112,6 +112,35 @@ class InsiderTradesListener:
             self._redis = redis.from_url(self.settings.redis_url)
         return self._redis
 
+    # ================================================================
+    # MONITORED WALLETS PERSISTENCE (survive redeploys)
+    # ================================================================
+
+    async def _load_monitored_wallets(self) -> None:
+        """Rehydrate _monitored_wallets from Redis (mirrors L1's tracked markets)."""
+        persisted = await self.publisher.load_monitored_wallets()
+        for wallet, data in persisted.items():
+            last_seen_ts = self.normalizer._parse_datetime_optional(
+                data.get("last_seen_ts")
+            )
+            self._monitored_wallets[wallet] = MonitoredWallet(
+                wallet=wallet,
+                categories_insider=data.get("categories_insider", []),
+                market_ids_insider=data.get("market_ids_insider"),
+                last_seen_ts=last_seen_ts,
+            )
+        if persisted:
+            self.logger.info(
+                "monitored_wallets_rehydrated", count=len(persisted)
+            )
+
+    def _serialize_monitored(self, info: MonitoredWallet) -> dict:
+        return {
+            "categories_insider": info.categories_insider,
+            "market_ids_insider": info.market_ids_insider,
+            "last_seen_ts": info.last_seen_ts.isoformat() if info.last_seen_ts else None,
+        }
+
     async def run(self) -> None:
         """Run command listener + trade polling concurrently."""
         self._running = True
@@ -121,6 +150,12 @@ class InsiderTradesListener:
         # registry was injected, main.py loads it once for L1 + L2.
         if self._owns_registry:
             await self.registry.load()
+
+        # Rehydrate monitored wallets (survives redeploys). Without this,
+        # ADD_WALLET commands only fire once at detection time and a
+        # docker compose down/up silently stops tracking every insider
+        # already detected.
+        await self._load_monitored_wallets()
 
         # Ensure consumer group exists
         await self._ensure_consumer_group()
@@ -269,6 +304,9 @@ class InsiderTradesListener:
                 categories_insider=command.categories_insider,
                 market_ids_insider=command.market_ids_insider,
             )
+            await self.publisher.save_monitored_wallet(
+                wallet, self._serialize_monitored(self._monitored_wallets[wallet])
+            )
             self._stats["wallets_added"] += 1
             self.logger.info(
                 "wallet_added",
@@ -299,10 +337,14 @@ class InsiderTradesListener:
                     market_ids_insider=command.market_ids_insider,
                 )
                 self._stats["wallets_added"] += 1
+            await self.publisher.save_monitored_wallet(
+                wallet, self._serialize_monitored(self._monitored_wallets[wallet])
+            )
 
         elif command.command_type == "REMOVE_WALLET":
             if wallet in self._monitored_wallets:
                 del self._monitored_wallets[wallet]
+                await self.publisher.remove_monitored_wallet(wallet)
                 self._stats["wallets_removed"] += 1
                 self.logger.info(
                     "wallet_removed",
@@ -441,6 +483,11 @@ class InsiderTradesListener:
                 if t.get("timestamp")
             )
             info.last_seen_ts = latest_ts
+            # Persist so a restart doesn't re-poll from scratch (mitigated by
+            # ON CONFLICT DO NOTHING downstream, but wastes Data API calls).
+            await self.publisher.save_monitored_wallet(
+                wallet, self._serialize_monitored(info)
+            )
 
     # ================================================================
     # CATEGORY MATCHING

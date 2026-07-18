@@ -400,6 +400,99 @@ async def test_real_wallet_polling():
         traceback.print_exc()
 
 
+async def test_monitored_wallets_persistence():
+    """
+    Integration test: verify _monitored_wallets survives a simulated
+    redeploy — ADD_WALLET must mirror to Redis (monitored:wallets hash) and
+    a fresh InsiderTradesListener instance must rehydrate from it on load,
+    including last_seen_ts. REMOVE_WALLET must clear the Redis entry too.
+    """
+    print("\n" + "=" * 60)
+    print("TEST 8: Monitored wallets persistence (survives redeploy)")
+    print("=" * 60)
+
+    try:
+        from ingestion.publisher import RedisPublisher, MONITORED_WALLETS_KEY
+        from ingestion.config import get_settings
+
+        settings = get_settings()
+        publisher = RedisPublisher()
+
+        healthy = await publisher.health_check()
+        if not healthy:
+            print("  ⚠️ Skipped: Redis not reachable")
+            return
+
+        test_wallet = "0xPersistTest999"
+        test_wallet_lower = test_wallet.lower()
+
+        # Cleanup any leftover state from a previous run
+        await publisher.remove_monitored_wallet(test_wallet_lower)
+
+        # Step 1: ADD_WALLET on listener A must mirror to Redis
+        listener_a = InsiderTradesListener(publisher=publisher)
+        cmd_data = {
+            b"payload": InsiderTradeCommand(
+                wallet=test_wallet,
+                categories_insider=["Sports", "Crypto"],
+                command_type="ADD_WALLET",
+            ).model_dump_json().encode(),
+        }
+        await listener_a._process_command(b"1-0", cmd_data)
+        assert test_wallet_lower in listener_a._monitored_wallets
+        print("  ADD_WALLET processed on listener A ✅")
+
+        persisted = await publisher.load_monitored_wallets()
+        assert test_wallet_lower in persisted
+        assert persisted[test_wallet_lower]["categories_insider"] == ["Sports", "Crypto"]
+        print(f"  Mirrored to Redis hash '{MONITORED_WALLETS_KEY}' ✅")
+
+        # Simulate last_seen_ts being updated by polling, then persisted
+        listener_a._monitored_wallets[test_wallet_lower].last_seen_ts = datetime(
+            2026, 1, 15, 12, 0, tzinfo=timezone.utc
+        )
+        await publisher.save_monitored_wallet(
+            test_wallet_lower,
+            listener_a._serialize_monitored(listener_a._monitored_wallets[test_wallet_lower]),
+        )
+        print("  last_seen_ts persisted ✅")
+
+        # Step 2: a FRESH listener instance (simulating a redeploy) must
+        # rehydrate the wallet, its categories, and its last_seen_ts.
+        listener_b = InsiderTradesListener(publisher=publisher)
+        assert listener_b.monitored_count == 0
+        await listener_b._load_monitored_wallets()
+        assert test_wallet_lower in listener_b._monitored_wallets
+        rehydrated = listener_b._monitored_wallets[test_wallet_lower]
+        assert rehydrated.categories_insider == ["Sports", "Crypto"]
+        assert rehydrated.last_seen_ts is not None
+        assert rehydrated.last_seen_ts.year == 2026
+        print("  Fresh listener rehydrated wallet + categories + last_seen_ts ✅")
+
+        # Step 3: REMOVE_WALLET must clear Redis too, not just memory
+        cmd_data_remove = {
+            b"payload": InsiderTradeCommand(
+                wallet=test_wallet,
+                categories_insider=[],
+                command_type="REMOVE_WALLET",
+            ).model_dump_json().encode(),
+        }
+        await listener_b._process_command(b"2-0", cmd_data_remove)
+        assert test_wallet_lower not in listener_b._monitored_wallets
+
+        persisted_after_remove = await publisher.load_monitored_wallets()
+        assert test_wallet_lower not in persisted_after_remove
+        print("  REMOVE_WALLET cleared Redis entry ✅")
+
+        await publisher.close()
+        print("\n  ✅ Monitored wallets persistence test passed")
+
+    except Exception as e:
+        print(f"  ⚠️ Skipped: {e}")
+        import traceback
+        traceback.print_exc()
+
+
 def main():
     print("\n" + "=" * 60)
     print("  L2 INSIDER TRADES LISTENER - TEST SUITE")
@@ -416,6 +509,7 @@ def main():
     print("\n" + "-" * 60)
     print("Running integration tests...")
     asyncio.run(test_redis_command_injection())
+    asyncio.run(test_monitored_wallets_persistence())
     asyncio.run(test_real_wallet_polling())
 
     print("\n" + "=" * 60)

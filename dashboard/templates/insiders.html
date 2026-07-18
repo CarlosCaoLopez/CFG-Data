@@ -29,7 +29,7 @@
       </thead>
       <tbody>
         <template x-for="w in items" :key="w.address">
-          <tr class="cursor-pointer" @click="select(w)">
+          <tr class="cursor-pointer" @click="goTo(w)">
             <td><span class="font-mono text-indigo-400 text-xs" x-text="w.address.slice(0,10) + '…' + w.address.slice(-4)"></span></td>
             <td>
               <div class="flex flex-wrap gap-1">
@@ -56,57 +56,13 @@
     <span class="text-xs text-slate-400" x-text="'Página ' + page"></span>
     <button @click="nextPage()" :disabled="page * limit >= total" class="btn-ghost disabled:opacity-40">Siguiente →</button>
   </div>
-
-  <!-- Detail panel -->
-  <div x-show="selected" x-cloak class="card">
-    <div class="flex items-center justify-between mb-4">
-      <h3 class="text-sm font-semibold text-white">Detalle: <span class="font-mono text-indigo-400" x-text="selected?.address"></span></h3>
-      <button @click="selected = null" class="btn-ghost text-xs">✕ Cerrar</button>
-    </div>
-    <div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-4">
-      <div class="bg-slate-700 rounded-lg p-3 text-center">
-        <p class="text-lg font-bold text-red-400" x-text="(selected?.insider_trades || []).length"></p>
-        <p class="text-xs text-slate-500">Trades insider</p>
-      </div>
-      <div class="bg-slate-700 rounded-lg p-3 text-center">
-        <p class="text-lg font-bold text-yellow-400" x-text="fmtUSD(selected?.total_volume_usdc)"></p>
-        <p class="text-xs text-slate-500">Volumen total</p>
-      </div>
-      <div class="bg-slate-700 rounded-lg p-3 text-center">
-        <p class="text-lg font-bold text-blue-400" x-text="selected?.markets_traded ?? 0"></p>
-        <p class="text-xs text-slate-500">Markets</p>
-      </div>
-      <div class="bg-slate-700 rounded-lg p-3 text-center">
-        <p class="text-xs text-slate-300 font-mono" x-text="fmtDate(selected?.first_tx_polygon)"></p>
-        <p class="text-xs text-slate-500">1ª tx Polygon</p>
-      </div>
-    </div>
-    <div class="table-wrap max-h-64 overflow-y-auto">
-      <table>
-        <thead><tr><th>Market</th><th>Timestamp</th><th>Side</th><th>Outcome</th><th>Price</th><th>USDC</th><th>Last</th></tr></thead>
-        <tbody>
-          <template x-for="t in (selected?.insider_trades || [])" :key="t.id">
-            <tr>
-              <td class="text-xs max-w-xs line-clamp-1" x-text="t.question || t.market_id?.slice(0,14)+'…'"></td>
-              <td class="text-xs font-mono" x-text="fmtDate(t.timestamp)"></td>
-              <td><span :class="t.side === 'BUY' ? 'badge-green' : 'badge-red'" x-text="t.side"></span></td>
-              <td x-text="t.outcome"></td>
-              <td class="font-mono text-xs" x-text="parseFloat(t.prize || 0).toFixed(3)"></td>
-              <td class="font-mono text-xs" x-text="fmtUSD(t.size_usdc)"></td>
-              <td><span x-show="t.last_trade" class="badge-yellow">✓</span></td>
-            </tr>
-          </template>
-        </tbody>
-      </table>
-    </div>
-  </div>
 </div>
 
 <script>
 function insidersPage() {
   return {
     items: [], total: 0, page: 1, limit: 50,
-    filter_category: '', selected: null,
+    filter_category: '',
     async load() {
       const params = new URLSearchParams({ page: this.page, limit: this.limit });
       if (this.filter_category) params.set('category', this.filter_category);
@@ -114,10 +70,7 @@ function insidersPage() {
       const d = await r.json();
       this.items = d.items; this.total = d.total;
     },
-    async select(w) {
-      const r = await fetch('/api/insiders/' + w.address);
-      this.selected = await r.json();
-    },
+    goTo(w) { window.location.href = '/insiders/' + w.address; },
     nextPage() { this.page++; this.load(); },
     prevPage() { if (this.page > 1) { this.page--; this.load(); } },
     fmtUSD(n) { return '$' + parseFloat(n ?? 0).toLocaleString(undefined, {maximumFractionDigits: 0}); },

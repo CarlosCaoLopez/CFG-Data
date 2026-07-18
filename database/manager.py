@@ -6,6 +6,7 @@ from database.models.wallet import Wallet
 from database.models.trade import Trade
 from database.models.insiders_trade import InsidersTrade
 from database.models.closed_market_variables import ClosedMarketVariables
+from database.models.insider_detection import InsiderDetection
 
 class DatabaseManager:
     def __init__(self, session: AsyncSession):
@@ -149,6 +150,60 @@ class DatabaseManager:
         stmt = insert(InsidersTrade).values(insider_trades)
         stmt = stmt.on_conflict_do_nothing(index_elements=["id"])
         await self.session.execute(stmt)
+        await self.session.commit()
+
+    async def upsert_insider_detection(
+        self, wallet: str, market_id: str, categories_insider: list[str]
+    ):
+        """
+        Logs an insider detection (wallet flagged in a market by Motor D).
+        On re-detection for the same wallet+market, merges categories but
+        keeps the original detected_at and status untouched — this is a
+        historical log, not a mutable snapshot like `wallets`.
+        """
+        stmt = insert(InsiderDetection).values(
+            wallet=wallet,
+            market_id=market_id,
+            categories_insider=categories_insider,
+        )
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["wallet", "market_id"],
+            set_={
+                "categories_insider": sa_text(
+                    "ARRAY(SELECT DISTINCT unnest("
+                    "COALESCE(insider_detections.categories_insider, '{}'::text[]) || "
+                    "COALESCE(EXCLUDED.categories_insider, '{}'::text[])))"
+                ),
+            },
+        )
+        await self.session.execute(stmt)
+        await self.session.commit()
+
+    async def snapshot_detection_trades(self, market_id: str, wallets: list[str]):
+        """
+        Copies the trades that triggered a detection (this market, these
+        wallets) from `trades` into `insiders_trades` with
+        is_detection_trade=TRUE, before T4 deletes `trades` for this market.
+        Idempotent: re-running just (re)marks the flag on conflict.
+        """
+        if not wallets:
+            return
+        await self.session.execute(
+            sa_text("""
+                INSERT INTO insiders_trades
+                    (id, wallet_id, market_id, timestamp, side, outcome,
+                     prize, size_usdc, size_tokens, last_trade,
+                     is_detection_trade, updated_at)
+                SELECT
+                    id, wallet_id, market_id, timestamp, side, outcome,
+                    prize, size_usdc, size_tokens, last_trade,
+                    TRUE, NOW()
+                FROM trades
+                WHERE market_id = :market_id AND wallet_id = ANY(:wallets)
+                ON CONFLICT (id) DO UPDATE SET is_detection_trade = TRUE
+            """),
+            {"market_id": market_id, "wallets": wallets},
+        )
         await self.session.commit()
 
     async def upsert_closed_market_variables(self, cmv_data: dict):

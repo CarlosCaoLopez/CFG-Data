@@ -68,11 +68,15 @@ async def receive_insider_detection(
 
     For each wallet in the batch:
     1. Updates wallets table: insider=True, categories_insider, marketids_insider
-    2. Dispatches Celery task T3 to publish InsiderTradeCommand to Redis stream
+    2. Logs the detection in insider_detections (historical record, wallets is mutable)
+    3. Dispatches Celery task T3 to publish InsiderTradeCommand to Redis stream
+    Then snapshots the triggering trades into insiders_trades before T4 deletes
+    them from `trades`.
     """
     db = DatabaseManager(session)
     wallets_updated = 0
     tasks_dispatched = 0
+    detected_wallets: list[str] = []
     errors: list[str] = []
 
     for wallet_result in batch.wallets:
@@ -85,13 +89,24 @@ async def receive_insider_detection(
                 "marketids_insider": [batch.market_id],
             })
             wallets_updated += 1
+            detected_wallets.append(wallet_result.wallet)
         except Exception as e:
             msg = f"DB update failed for {wallet_result.wallet}: {e}"
             logger.error(msg, exc_info=True)
             errors.append(msg)
             continue
 
-        # 2. Dispatch T3
+        # 2. Log detection (historical record)
+        try:
+            await db.upsert_insider_detection(
+                wallet_result.wallet, batch.market_id, wallet_result.categories_insider
+            )
+        except Exception as e:
+            msg = f"Detection log failed for {wallet_result.wallet}: {e}"
+            logger.error(msg, exc_info=True)
+            errors.append(msg)
+
+        # 3. Dispatch T3
         try:
             from workers.tasks import publish_insider_command
             publish_insider_command.delay({
@@ -106,7 +121,15 @@ async def receive_insider_detection(
             logger.error(msg, exc_info=True)
             errors.append(msg)
 
-    # 3. Delete closed_market_variables for this market (architecture: E cleans CMV after D)
+    # Snapshot the trade(s) that triggered the detection before T4 deletes
+    # `trades` for this market — otherwise the "smoking gun" is lost.
+    try:
+        await db.snapshot_detection_trades(batch.market_id, detected_wallets)
+        logger.info(f"Detection trades snapshotted for market_id={batch.market_id}")
+    except Exception as e:
+        logger.error(f"Detection trade snapshot failed for {batch.market_id}: {e}", exc_info=True)
+
+    # 4. Delete closed_market_variables for this market (architecture: E cleans CMV after D)
     try:
         await session.execute(
             text("DELETE FROM closed_market_variables WHERE market_id = :mid"),
@@ -117,7 +140,7 @@ async def receive_insider_detection(
     except Exception as e:
         logger.error(f"CMV cleanup failed for {batch.market_id}: {e}", exc_info=True)
 
-    # 4. Dispatch T4: delete trades for this processed market
+    # 5. Dispatch T4: delete trades for this processed market
     try:
         from workers.tasks import cleanup_market
         cleanup_market.delay(batch.market_id)

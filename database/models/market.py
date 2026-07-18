@@ -38,6 +38,6 @@ class Market(Base):
 
     # Relaciones para navegar desde el mercado a sus datos
     trades: Mapped[List["Trade"]] = relationship(back_populates="market_rel")
-    alerts: Mapped[List["Alert"]] = relationship(back_populates="market_rel")
     insiders_trades: Mapped[List["InsidersTrade"]] = relationship(back_populates="market_rel")
     closed_market_vars: Mapped[List["ClosedMarketVariables"]] = relationship(back_populates="market_rel")
+    insider_detections: Mapped[List["InsiderDetection"]] = relationship(back_populates="market_rel")

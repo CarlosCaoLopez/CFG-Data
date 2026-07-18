@@ -54,6 +54,11 @@ async def page_insiders(request: Request):
     return templates.TemplateResponse("insiders.html", {"request": request, "active": "insiders"})
 
 
+@app.get("/insiders/{wallet}")
+async def page_insider_detail(request: Request, wallet: str):
+    return templates.TemplateResponse("insider_detail.html", {"request": request, "active": "insiders", "wallet": wallet})
+
+
 @app.get("/pipeline")
 async def page_pipeline(request: Request):
     return templates.TemplateResponse("pipeline.html", {"request": request, "active": "pipeline"})

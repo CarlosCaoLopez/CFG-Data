@@ -54,6 +54,17 @@ async def get_categories() -> list[str] | None:
         return None
 
 
+async def get_monitored_wallet(wallet: str) -> dict | None:
+    """L2 live monitoring state for a wallet (see ingestion/stats_server.py). None if unreachable."""
+    try:
+        async with httpx.AsyncClient(timeout=2.0) as client:
+            r = await client.get(f"{INGESTION_STATS_URL}/monitored/{wallet}")
+            r.raise_for_status()
+            return r.json()
+    except Exception:
+        return None
+
+
 async def post_categories(categories: list[str]) -> dict:
     try:
         async with httpx.AsyncClient(timeout=2.0) as client:

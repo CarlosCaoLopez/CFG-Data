@@ -158,6 +158,11 @@ def db_cleanup(session) -> None:
         text("DELETE FROM closed_market_variables WHERE market_id = :mid"),
         {"mid": TEST_MARKET_ID},
     )
+    # Detection log (FK: market_id → markets) — must come before market deletion
+    session.execute(
+        text("DELETE FROM insider_detections WHERE wallet = :addr AND market_id = :mid"),
+        {"addr": TEST_WALLET, "mid": TEST_MARKET_ID},
+    )
     # Insider trades (FK: wallet_id → wallets) — must come before wallet deletion
     session.execute(
         text("DELETE FROM insiders_trades WHERE wallet_id = :addr"),
@@ -760,6 +765,37 @@ def run_tests() -> int:
             check("E: wallet.insider set to True in DB", False, str(e))
             check("E: wallet.categories_insider populated", False, "")
 
+        # 6a-bis. Verify E logged the detection in insider_detections
+        try:
+            with get_sync_session() as session:
+                det_row = session.execute(
+                    text("SELECT detected_at, categories_insider "
+                         "FROM insider_detections WHERE wallet = :a AND market_id = :m"),
+                    {"a": TEST_WALLET, "m": TEST_MARKET_ID},
+                ).fetchone()
+            check(
+                "E: insider_detections row logged (detected_at set)",
+                det_row is not None and det_row.detected_at is not None,
+                f"row={'found, detected_at=' + str(det_row.detected_at) if det_row else 'NOT FOUND'}",
+            )
+        except Exception as e:
+            check("E: insider_detections row logged (detected_at set)", False, str(e))
+
+        # 6a-ter. Verify E snapshotted the triggering trade before T4 deletes `trades`
+        try:
+            with get_sync_session() as session:
+                snap_row = session.execute(
+                    text("SELECT is_detection_trade FROM insiders_trades WHERE id = :tid"),
+                    {"tid": TEST_TRADE_ID},
+                ).fetchone()
+            check(
+                "E: detection trade snapshotted to insiders_trades (is_detection_trade=TRUE)",
+                snap_row is not None and bool(snap_row.is_detection_trade),
+                f"row={'found, is_detection_trade=' + str(snap_row.is_detection_trade) if snap_row else 'NOT FOUND'}",
+            )
+        except Exception as e:
+            check("E: detection trade snapshotted to insiders_trades (is_detection_trade=TRUE)", False, str(e))
+
         # 6b. Verify T3: message published to insider_commands
         print(f"{INFO} xlen(insider_commands) baseline = {xlen_before}")
 
@@ -797,6 +833,8 @@ def run_tests() -> int:
         for label in [
             "E: wallet.insider set to True in DB",
             "E: wallet.categories_insider populated",
+            "E: insider_detections row logged (detected_at set)",
+            "E: detection trade snapshotted to insiders_trades (is_detection_trade=TRUE)",
             "T3: published command to insider_commands stream",
             "L2: ACKed T3 command from insider_commands (pending → 0)",
         ]:
